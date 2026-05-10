@@ -1,0 +1,2 @@
+-- Placeholder schema for MVP initialization
+-- Final schema to be defined in issue #1 backlog item.
