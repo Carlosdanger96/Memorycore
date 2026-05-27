@@ -1,0 +1,350 @@
+-- CozoDB Schema for Memorycore
+-- Primary memory store: graph/relation/vector/FTS
+-- Version: 1.0.0
+
+-- ============================================================================
+-- CORE TABLES
+-- ============================================================================
+
+-- Memories table - stores all memory records
+?memories[
+    memory_id: str,
+    project_id: str,
+    content: str,
+    source_refs: [str],
+    created_at: str,
+    created_by: str,
+    tags: [str],
+    confidence: f64,
+    status: str,
+    memory_type: str,
+    summary: str,
+    raw_evidence_ref: str,
+    trust_score: f64,
+    approval_status: str,
+    updated_at: str,
+    version: i64,
+    PRIMARY KEY memory_id
+]
+
+-- Projects table - for access control and organization
+?projects[
+    project_id: str,
+    name: str,
+    description: str,
+    created_at: str,
+    created_by: str,
+    is_active: bool,
+    PRIMARY KEY project_id
+]
+
+-- Sources table - tracks where memories came from
+?sources[
+    source_id: str,
+    source_type: str,  -- chat | file | github | manual | tool | web
+    reference: str,    -- URL, file path, commit hash, etc.
+    title: str,
+    author: str,
+    created_at: str,
+    metadata: {},
+    PRIMARY KEY source_id
+]
+
+-- Tags table - for categorization
+?tags[
+    tag_id: str,
+    name: str,
+    description: str,
+    created_at: str,
+    created_by: str,
+    PRIMARY KEY tag_id
+]
+
+-- ============================================================================
+-- RELATIONSHIP TABLES (Graph Structure)
+-- ============================================================================
+
+-- Memory links - bidirectional relationships between memories
+?memory_links[
+    link_id: str,
+    from_memory_id: str,
+    to_memory_id: str,
+    link_type: str,  -- related | derived | contradicts | supersedes | references | depends_on
+    created_at: str,
+    created_by: str,
+    strength: f64,   -- 0.0 to 1.0
+    description: str,
+    PRIMARY KEY link_id,
+    FOREIGN KEY from_memory_id -> memories(memory_id),
+    FOREIGN KEY to_memory_id -> memories(memory_id)
+]
+
+-- Supersession chains - tracks when a memory replaces another
+?supersession_chains[
+    chain_id: str,
+    old_memory_id: str,
+    new_memory_id: str,
+    reason: str,
+    created_at: str,
+    created_by: str,
+    is_active: bool,
+    PRIMARY KEY chain_id,
+    FOREIGN KEY old_memory_id -> memories(memory_id),
+    FOREIGN KEY new_memory_id -> memories(memory_id)
+]
+
+-- Contradiction chains - tracks when memories contradict each other
+?contradiction_chains[
+    chain_id: str,
+    memory_a_id: str,
+    memory_b_id: str,
+    resolution: str,  -- unresolved | resolved | merged | deprecated_a | deprecated_b
+    resolution_notes: str,
+    created_at: str,
+    created_by: str,
+    resolved_at: str,
+    resolved_by: str,
+    PRIMARY KEY chain_id,
+    FOREIGN KEY memory_a_id -> memories(memory_id),
+    FOREIGN KEY memory_b_id -> memories(memory_id)
+]
+
+-- ============================================================================
+-- INDEXES
+-- ============================================================================
+
+-- Full-Text Search Index on memories
+:create ft_index_memories {
+    source: memories,
+    index content,
+    index summary,
+    index tags,
+    index memory_type,
+    index project_id
+}
+
+-- Vector index placeholder (HNSW) - will be implemented after core functionality
+-- :create vector_index_memories {
+--     source: memories,
+--     index embedding: vector(f32, 768),
+--     algorithm: hnsw,
+--     metric: cosine
+-- }
+
+-- Regular indexes for performance
+:create idx_memories_project_id on memories(project_id)
+:create idx_memories_status on memories(status)
+:create idx_memories_created_at on memories(created_at)
+:create idx_memories_created_by on memories(created_by)
+:create idx_memories_confidence on memories(confidence)
+:create idx_memories_trust_score on memories(trust_score)
+:create idx_memories_tags on memories(tags)
+:create idx_memories_memory_type on memories(memory_type)
+
+:create idx_projects_created_by on projects(created_by)
+:create idx_projects_is_active on projects(is_active)
+
+:create idx_sources_source_type on sources(source_type)
+:create idx_sources_created_by on sources(created_by)
+
+:create idx_memory_links_from on memory_links(from_memory_id)
+:create idx_memory_links_to on memory_links(to_memory_id)
+:create idx_memory_links_type on memory_links(link_type)
+
+:create idx_supersession_old on supersession_chains(old_memory_id)
+:create idx_supersession_new on supersession_chains(new_memory_id)
+:create idx_supersession_active on supersession_chains(is_active)
+
+:create idx_contradiction_a on contradiction_chains(memory_a_id)
+:create idx_contradiction_b on contradiction_chains(memory_b_id)
+:create idx_contradiction_resolution on contradiction_chains(resolution)
+
+-- ============================================================================
+-- RULES FOR DERIVED DATA
+-- ============================================================================
+
+-- Rule: Get all memories for a project
+memories_by_project[project_id: str] <- 
+    memories(project_id, memory_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+
+-- Rule: Get all active memories (not archived)
+active_memories[] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where status != 'archived'
+
+-- Rule: Get all accepted memories
+accepted_memories[] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where status == 'accepted'
+
+-- Rule: Get all candidate memories
+candidate_memories[] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where status == 'candidate'
+
+-- Rule: Get memories by tag
+memories_by_tag[tag: str] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where tag in tags
+
+-- Rule: Get memories by multiple tags (AND logic)
+memories_by_tags[tags: [str]] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where all(t in tags for t in tags)
+
+-- Rule: Get memories created by a user
+memories_by_user[user_id: str] <- 
+    memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+    where created_by == user_id
+
+-- Rule: Get all links from a memory
+links_from_memory[from_memory_id: str] <- 
+    memory_links(link_id, from_memory_id, to_memory_id, link_type, created_at, created_by, strength, description)
+
+-- Rule: Get all links to a memory
+links_to_memory[to_memory_id: str] <- 
+    memory_links(link_id, from_memory_id, to_memory_id, link_type, created_at, created_by, strength, description)
+
+-- Rule: Get supersession chain for a memory (old memories it supersedes)
+superseded_by[new_memory_id: str] <- 
+    supersession_chains(chain_id, old_memory_id, new_memory_id, reason, created_at, created_by, is_active)
+    where is_active == true
+
+-- Rule: Get supersession chain for a memory (new memories that supersede it)
+supersedes[old_memory_id: str] <- 
+    supersession_chains(chain_id, old_memory_id, new_memory_id, reason, created_at, created_by, is_active)
+    where is_active == true
+
+-- Rule: Get contradiction chains for a memory
+contradictions_for_memory[memory_id: str] <- 
+    contradiction_chains(chain_id, memory_a_id, memory_b_id, resolution, resolution_notes, created_at, created_by, resolved_at, resolved_by)
+    where memory_id == memory_a_id or memory_id == memory_b_id
+
+-- Rule: Get unresolved contradictions
+unresolved_contradictions[] <- 
+    contradiction_chains(chain_id, memory_a_id, memory_b_id, resolution, resolution_notes, created_at, created_by, resolved_at, resolved_by)
+    where resolution == 'unresolved'
+
+-- ============================================================================
+-- SEARCH FUNCTIONS
+-- ============================================================================
+
+-- Full-text search function
+:func ft_search_memories(query: str, project_id: ?str, status: ?str, tags: ?[str], limit: ?i64, offset: ?i64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    summary: str,
+    tags: [str],
+    confidence: f64,
+    trust_score: f64,
+    status: str,
+    created_at: str,
+    score: f64
+}] {
+    search ft_index_memories {
+        query: query,
+        limit: limit or 100,
+        offset: offset or 0
+    }
+    where project_id is null or project_id == project_id
+    where status is null or status == status
+    where tags is null or all(t in tags for t in tags)
+    order by score desc
+}
+
+-- Vector search function (placeholder - will be implemented later)
+-- :func vector_search_memories(query_embedding: [f32], limit: ?i64, project_id: ?str) -> [{
+--     memory_id: str,
+--     project_id: str,
+--     content: str,
+--     score: f64
+-- }] {
+--     search vector_index_memories {
+--         query: query_embedding,
+--         limit: limit or 100,
+--         filter: project_id is null or project_id == project_id
+--     }
+-- }
+
+-- ============================================================================
+-- AGGREGATION FUNCTIONS
+-- ============================================================================
+
+-- Count memories by project
+:func count_memories_by_project(project_id: str) -> i64 {
+    count(memories_by_project[project_id])
+}
+
+-- Count memories by status
+:func count_memories_by_status(project_id: str, status: str) -> i64 {
+    count(memories(project_id, memory_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
+        where status == status)
+}
+
+-- Get all tags for a project
+:func get_project_tags(project_id: str) -> [str] {
+    unique(t for memories(project_id, memory_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version) for t in tags)
+}
+
+-- Get project statistics
+:func get_project_stats(project_id: str) -> {
+    total: i64,
+    accepted: i64,
+    candidate: i64,
+    archived: i64,
+    tags: [str]
+} {
+    total: count(memories_by_project[project_id]),
+    accepted: count_memories_by_status(project_id, 'accepted'),
+    candidate: count_memories_by_status(project_id, 'candidate'),
+    archived: count_memories_by_status(project_id, 'archived'),
+    tags: get_project_tags(project_id)
+}
+
+-- ============================================================================
+-- INITIAL DATA (Optional - for bootstrap)
+-- ============================================================================
+
+-- Default status values
+:put memories(status: 'candidate')
+:put memories(status: 'accepted')
+:put memories(status: 'archived')
+
+-- Default memory types
+:put memories(memory_type: 'fact')
+:put memories(memory_type: 'decision')
+:put memories(memory_type: 'design')
+:put memories(memory_type: 'task')
+:put memories(memory_type: 'reference')
+:put memories(memory_type: 'warning')
+:put memories(memory_type: 'experiment')
+
+-- Default link types
+:put memory_links(link_type: 'related')
+:put memory_links(link_type: 'derived')
+:put memory_links(link_type: 'contradicts')
+:put memory_links(link_type: 'supersedes')
+:put memory_links(link_type: 'references')
+:put memory_links(link_type: 'depends_on')
+
+-- Default source types
+:put sources(source_type: 'chat')
+:put sources(source_type: 'file')
+:put sources(source_type: 'github')
+:put sources(source_type: 'manual')
+:put sources(source_type: 'tool')
+:put sources(source_type: 'web')
+
+-- Default approval statuses
+:put memories(approval_status: 'candidate')
+:put memories(approval_status: 'accepted')
+:put memories(approval_status: 'rejected')
+:put memories(approval_status: 'archived')
+
+-- Default resolution types for contradictions
+:put contradiction_chains(resolution: 'unresolved')
+:put contradiction_chains(resolution: 'resolved')
+:put contradiction_chains(resolution: 'merged')
+:put contradiction_chains(resolution: 'deprecated_a')
+:put contradiction_chains(resolution: 'deprecated_b')
