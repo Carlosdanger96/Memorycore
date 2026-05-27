@@ -1,0 +1,11 @@
+# Memory Core Phase 1 MVP Dependencies
+
+# MCP Server
+mcp>=1.0.0
+
+# For YAML config loading
+pyyaml>=6.0
+
+# For testing
+pytest>=7.0
+pytest-cov>=4.0
