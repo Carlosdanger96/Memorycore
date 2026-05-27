@@ -1,6 +1,43 @@
+# Memory Core Configuration
+# Supports both SQLite (default) and Postgres
+
 server:
   host: 127.0.0.1
   port: 8080
+
+# Storage configuration
+# Use either 'sqlite' or 'postgres' as the driver
 storage:
+  # SQLite configuration (default)
   driver: sqlite
   dsn: file:memorycore.db
+  
+  # Postgres configuration (uncomment to use Postgres)
+  # driver: postgres
+  # host: localhost
+  # port: 5432
+  # database: memorycore
+  # user: memorycore
+  # password: yourpassword
+  # sslmode: prefer
+  
+  # Connection pool settings (for Postgres)
+  # min_connections: 1
+  # max_connections: 10
+  # connection_timeout: 30
+
+# Optional: Audit log settings
+audit:
+  # Enable/disable audit logging
+  enabled: true
+  
+  # Maximum audit log entries to keep (0 = unlimited)
+  max_entries: 10000
+
+# Optional: Performance settings
+performance:
+  # Maximum search results
+  max_search_results: 1000
+  
+  # Default page size
+  default_page_size: 100

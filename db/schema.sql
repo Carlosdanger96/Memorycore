@@ -1,9 +1,10 @@
 -- Memory Core Database Schema
 -- SQLite implementation for Phase 1 MVP
+-- Postgres-compatible for Phase 2
 
--- Enable WAL mode for better concurrency
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+-- For SQLite: Enable WAL mode for better concurrency
+-- PRAGMA journal_mode=WAL;
+-- PRAGMA foreign_keys=ON;
 
 -- Memory records table
 CREATE TABLE IF NOT EXISTS memories (
@@ -94,7 +95,8 @@ CREATE TABLE IF NOT EXISTS user_project_roles (
 CREATE INDEX IF NOT EXISTS idx_user_project_roles_user ON user_project_roles(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_project_roles_project ON user_project_roles(project_id);
 
--- Full-text search virtual table for memory content
+-- Full-text search virtual table for memory content (SQLite only)
+-- For Postgres, use the migration script which creates tsvector-based search
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     memory_id,
     project_id,
@@ -103,7 +105,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
     tokenize="unicode61 remove_diacritics 2"
 );
 
--- Trigger to keep FTS table in sync
+-- Trigger to keep FTS table in sync (SQLite only)
 CREATE TRIGGER IF NOT EXISTS memories_fts_insert AFTER INSERT ON memories
 BEGIN
     INSERT INTO memories_fts (memory_id, project_id, content, tags)
@@ -121,3 +123,10 @@ CREATE TRIGGER IF NOT EXISTS memories_fts_delete AFTER DELETE ON memories
 BEGIN
     DELETE FROM memories_fts WHERE memory_id = old.memory_id;
 END;
+
+-- Migration tracking table (for Postgres compatibility)
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    migration_id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+    description TEXT
+);
