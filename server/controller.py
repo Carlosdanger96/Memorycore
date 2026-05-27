@@ -63,9 +63,10 @@ class MemoryRecord:
     approval_status: str = MemoryStatus.CANDIDATE
     updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     version: int = 1
+    vector_embedding: Optional[List[float]] = None  # 768-dim float32 vector
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "memory_id": self.memory_id,
             "project_id": self.project_id,
             "content": self.content,
@@ -83,6 +84,9 @@ class MemoryRecord:
             "updated_at": self.updated_at,
             "version": self.version,
         }
+        if self.vector_embedding is not None:
+            result["vector_embedding"] = self.vector_embedding
+        return result
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryRecord":
@@ -103,6 +107,7 @@ class MemoryRecord:
             approval_status=data.get("approval_status", MemoryStatus.CANDIDATE),
             updated_at=data.get("updated_at", datetime.utcnow().isoformat()),
             version=data.get("version", 1),
+            vector_embedding=data.get("vector_embedding"),
         )
 
 
@@ -159,6 +164,7 @@ class MemoryController:
     """Primary controller for memory operations using CozoDB.
     
     Implements core CRUD, search, and advanced operations.
+    Supports vector embeddings for semantic search.
     """
 
     def __init__(
@@ -166,6 +172,8 @@ class MemoryController:
         db_path: str = "memorycore.cozo",
         schema_path: Optional[str] = None,
         audit_logger: Optional[Any] = None,
+        embedding_manager: Optional[Any] = None,
+        generate_embeddings: bool = True,
     ):
         """Initialize the memory controller.
         
@@ -173,12 +181,23 @@ class MemoryController:
             db_path: Path to CozoDB database file
             schema_path: Path to CozoDB schema file
             audit_logger: Optional audit logger
+            embedding_manager: Optional embedding manager for vector generation
+            generate_embeddings: Whether to generate embeddings for new memories (default True)
         """
         self.db_path = db_path
         self.schema_path = schema_path or "cozodb/schema.cozo"
         self.audit_logger = audit_logger
         self._db = None
         self._cozo = None
+        self.embedding_manager = embedding_manager
+        self.generate_embeddings = generate_embeddings
+        
+        # Initialize embedding manager if not provided
+        if self.embedding_manager is None and generate_embeddings:
+            from server.embedding import EmbeddingManager, LocalEmbeddingSidecar
+            self.embedding_manager = EmbeddingManager(
+                generator=LocalEmbeddingSidecar()
+            )
         
         self._initialize_db()
 
@@ -204,9 +223,13 @@ class MemoryController:
             raise CozoDBError(f"Failed to initialize CozoDB: {e}")
 
     def close(self) -> None:
-        """Close the database connection."""
-        self._db = None
-        logger.info("CozoDB connection closed")
+        """Close the database connection and embedding manager."""
+        if self._db:
+            self._db = None
+        if self.embedding_manager:
+            self.embedding_manager.close()
+            self.embedding_manager = None
+        logger.info("CozoDB connection and embedding manager closed")
 
     def __enter__(self):
         return self
@@ -232,10 +255,47 @@ class MemoryController:
         trust_score: float = 0.0,
         status: str = MemoryStatus.CANDIDATE,
         memory_id: Optional[str] = None,
+        vector_embedding: Optional[List[float]] = None,
+        generate_embedding: Optional[bool] = None,
     ) -> MemoryRecord:
-        """Add a new memory record."""
+        """Add a new memory record with optional vector embedding.
+        
+        Args:
+            project_id: The project to associate with
+            content: The memory content
+            created_by: The user/agent creating the memory
+            source_refs: Source references for the memory
+            tags: Tags for categorization
+            confidence: Confidence score (0.0 to 1.0)
+            memory_type: Type of memory (fact, decision, design, etc.)
+            summary: Brief summary of the memory
+            raw_evidence_ref: Reference to raw evidence
+            trust_score: Trust score (0.0 to 1.0)
+            status: Memory status (candidate, accepted, archived)
+            memory_id: Optional memory ID (generated if not provided)
+            vector_embedding: Optional pre-computed vector embedding
+            generate_embedding: Whether to generate embedding (defaults to self.generate_embeddings)
+        """
         if not memory_id:
             memory_id = f"m_{uuid.uuid4().hex[:12]}"
+        
+        # Generate embedding if needed
+        embedding = vector_embedding
+        if embedding is None and self.generate_embeddings:
+            should_generate = generate_embedding if generate_embedding is not None else True
+            if should_generate and self.embedding_manager:
+                try:
+                    # Generate embedding from content, summary, and tags
+                    embedding_result = self.embedding_manager.generate_for_memory(
+                        content=content,
+                        summary=summary if summary else None,
+                        tags=tags if tags else None,
+                    )
+                    embedding = embedding_result.embedding
+                    logger.debug(f"Generated embedding for memory: {memory_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate embedding for memory {memory_id}: {e}")
+                    # Continue without embedding
         
         record = MemoryRecord(
             memory_id=memory_id,
@@ -254,13 +314,15 @@ class MemoryController:
             approval_status=status,
             updated_at=datetime.utcnow().isoformat(),
             version=1,
+            vector_embedding=embedding,
         )
         
         try:
+            # Build the put command with all fields
             self._db.run(
                 "?[memory_id, project_id, content, source_refs, created_at, created_by, "
                 "tags, confidence, status, memory_type, summary, raw_evidence_ref, "
-                "trust_score, approval_status, updated_at, version] :put memories",
+                "trust_score, approval_status, updated_at, version, vector_embedding] :put memories",
                 record.to_dict()
             )
             
@@ -269,7 +331,11 @@ class MemoryController:
                     memory_id=record.memory_id,
                     user_id=created_by,
                     project_id=project_id,
-                    details={"status": status, "type": memory_type},
+                    details={
+                        "status": status,
+                        "type": memory_type,
+                        "has_embedding": embedding is not None,
+                    },
                 )
             
             logger.info(f"Added memory: {record.memory_id} to project: {project_id}")
@@ -323,11 +389,41 @@ class MemoryController:
         memory_id: str,
         updates: Dict[str, Any],
         user_id: str = "",
+        regenerate_embedding: Optional[bool] = None,
     ) -> Optional[MemoryRecord]:
-        """Update a memory record."""
+        """Update a memory record with optional embedding regeneration.
+        
+        Args:
+            memory_id: The memory ID
+            updates: Dictionary of fields to update
+            user_id: The user performing the update
+            regenerate_embedding: Whether to regenerate embedding if content changes
+        """
         existing = self.get_memory(memory_id)
         if not existing:
             return None
+        
+        # Check if content-related fields are being updated
+        content_changed = any(
+            key in updates for key in ["content", "summary", "tags"]
+        )
+        
+        # Generate new embedding if content changed and embedding generation is enabled
+        new_embedding = existing.vector_embedding
+        if content_changed and self.generate_embeddings:
+            should_regenerate = regenerate_embedding if regenerate_embedding is not None else True
+            if should_regenerate and self.embedding_manager:
+                try:
+                    embedding_result = self.embedding_manager.generate_for_memory(
+                        content=updates.get("content", existing.content),
+                        summary=updates.get("summary", existing.summary),
+                        tags=updates.get("tags", existing.tags),
+                    )
+                    new_embedding = embedding_result.embedding
+                    updates["vector_embedding"] = new_embedding
+                    logger.debug(f"Regenerated embedding for memory: {memory_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to regenerate embedding for memory {memory_id}: {e}")
         
         # Build update parameters
         params = {"memory_id": memory_id}
@@ -351,7 +447,7 @@ class MemoryController:
             self._db.run(
                 f"?[memory_id, project_id, content, source_refs, created_at, "
                 f"created_by, tags, confidence, status, memory_type, summary, "
-                f"raw_evidence_ref, trust_score, approval_status, updated_at, version] "
+                f"raw_evidence_ref, trust_score, approval_status, updated_at, version, vector_embedding] "
                 f":put memories :where memory_id == $memory_id :set {", ".".join(set_clauses), "}",
                 params
             )
@@ -553,6 +649,9 @@ class MemoryController:
             logger.error(f"Failed to search memories: {e}")
             raise CozoDBError(f"Failed to search memories: {e}")
 
+    # ADVANCED OPERATIONS
+    # ========================================================================
+=======
     def list_by_project(
         self,
         project_id: str,
@@ -571,6 +670,238 @@ class MemoryController:
         )
 
     # ========================================================================
+    # VECTOR SEARCH OPERATIONS
+    # ========================================================================
+
+    def vector_search(
+        self,
+        query_embedding: List[float],
+        project_id: Optional[str] = None,
+        status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 100,
+        ef_search: int = 100,
+        user_id: str = "",
+    ) -> SearchResult:
+        """Perform vector search using HNSW index.
+        
+        Args:
+            query_embedding: Query vector (768-dim float32)
+            project_id: Optional filter by project ID
+            status: Optional filter by status
+            tags: Optional filter by tags (AND logic)
+            limit: Maximum results
+            ef_search: Search depth (higher = better quality, slower)
+            user_id: User performing the search
+            
+        Returns:
+            SearchResult with vector search results
+        """
+        try:
+            from server.search import VectorSearch
+            
+            vector_search = VectorSearch(db=self._db)
+            result = vector_search.search(
+                query_embedding=query_embedding,
+                project_id=project_id,
+                status=status,
+                tags=tags,
+                limit=limit,
+                ef_search=ef_search,
+            )
+            
+            # Convert to MemoryRecords
+            results = []
+            scores = []
+            for vr in result.results:
+                results.append(MemoryRecord(
+                    memory_id=vr.memory_id,
+                    project_id=vr.project_id,
+                    content=vr.content,
+                    source_refs=[],
+                    created_at=vr.created_at,
+                    created_by="",
+                    tags=vr.tags,
+                    confidence=vr.confidence,
+                    status=vr.status,
+                    memory_type=MemoryType.FACT,
+                    summary=vr.summary,
+                    raw_evidence_ref="",
+                    trust_score=vr.trust_score,
+                    approval_status=vr.status,
+                    updated_at="",
+                    version=1,
+                ))
+                scores.append(vr.score)
+            
+            # Log the search
+            if self.audit_logger:
+                self.audit_logger.log_search(
+                    user_id=user_id,
+                    project_id=project_id,
+                    query="vector_search",
+                    results_count=len(results),
+                )
+            
+            return SearchResult(
+                results=results,
+                total=result.total,
+                limit=limit,
+                offset=0,
+                scores=scores,
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to perform vector search: {e}")
+            raise CozoDBError(f"Failed to perform vector search: {e}")
+
+    def hybrid_search(
+        self,
+        query: Optional[str] = None,
+        query_embedding: Optional[List[float]] = None,
+        project_id: Optional[str] = None,
+        status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        memory_type: Optional[str] = None,
+        limit: int = 100,
+        vector_weight: float = 0.5,
+        text_weight: float = 0.5,
+        ef_search: int = 100,
+        user_id: str = "",
+    ) -> SearchResult:
+        """Perform hybrid search combining vector and text search.
+        
+        Args:
+            query: Optional text query for FTS
+            query_embedding: Optional vector for semantic search
+            project_id: Optional filter by project ID
+            status: Optional filter by status
+            tags: Optional filter by tags
+            memory_type: Optional filter by memory type
+            limit: Maximum results
+            vector_weight: Weight for vector scores (0.0 to 1.0)
+            text_weight: Weight for text scores (0.0 to 1.0)
+            ef_search: Search depth for vector search
+            user_id: User performing the search
+            
+        Returns:
+            SearchResult with hybrid search results
+        """
+        try:
+            from server.search import HybridSearch
+            
+            hybrid_search = HybridSearch(db=self._db)
+            result = hybrid_search.search(
+                query=query,
+                query_embedding=query_embedding,
+                project_id=project_id,
+                status=status,
+                tags=tags,
+                memory_type=memory_type,
+                limit=limit,
+                vector_weight=vector_weight,
+                text_weight=text_weight,
+                ef_search=ef_search,
+            )
+            
+            # Convert to MemoryRecords
+            results = []
+            for hr in result.results:
+                results.append(MemoryRecord(
+                    memory_id=hr.memory_id,
+                    project_id=hr.project_id,
+                    content=hr.content,
+                    source_refs=[],
+                    created_at=hr.created_at,
+                    created_by="",
+                    tags=hr.tags,
+                    confidence=hr.confidence,
+                    status=hr.status,
+                    memory_type=MemoryType.FACT,
+                    summary=hr.summary,
+                    raw_evidence_ref="",
+                    trust_score=hr.trust_score,
+                    approval_status=hr.status,
+                    updated_at="",
+                    version=1,
+                ))
+            
+            # Log the search
+            if self.audit_logger:
+                self.audit_logger.log_search(
+                    user_id=user_id,
+                    project_id=project_id,
+                    query=query or "vector_query",
+                    results_count=len(results),
+                )
+            
+            return SearchResult(
+                results=results,
+                total=result.total,
+                limit=limit,
+                offset=0,
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to perform hybrid search: {e}")
+            raise CozoDBError(f"Failed to perform hybrid search: {e}")
+
+    def search_with_embedding_query(
+        self,
+        query: str,
+        project_id: Optional[str] = None,
+        status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 100,
+        vector_weight: float = 0.5,
+        text_weight: float = 0.5,
+        ef_search: int = 100,
+        user_id: str = "",
+    ) -> SearchResult:
+        """Search with automatic embedding generation for the query.
+        
+        Generates an embedding for the query string and performs hybrid search.
+        
+        Args:
+            query: Text query (will be embedded)
+            project_id: Optional filter by project ID
+            status: Optional filter by status
+            tags: Optional filter by tags
+            limit: Maximum results
+            vector_weight: Weight for vector scores
+            text_weight: Weight for text scores
+            ef_search: Search depth for vector search
+            user_id: User performing the search
+            
+        Returns:
+            SearchResult with hybrid search results
+        """
+        # Generate embedding for the query
+        query_embedding = None
+        if query and query.strip() and self.embedding_manager:
+            try:
+                embedding_result = self.embedding_manager.generate(query)
+                query_embedding = embedding_result.embedding
+            except Exception as e:
+                logger.warning(f"Failed to generate query embedding: {e}")
+        
+        # Perform hybrid search
+        return self.hybrid_search(
+            query=query,
+            query_embedding=query_embedding,
+            project_id=project_id,
+            status=status,
+            tags=tags,
+            limit=limit,
+            vector_weight=vector_weight,
+            text_weight=text_weight,
+            ef_search=ef_search,
+            user_id=user_id,
+        )
+
+    # ========================================================================
+    # ADVANCED OPERATIONS
+    # ================================================================================================================================================
     # ADVANCED OPERATIONS
     # ========================================================================
 

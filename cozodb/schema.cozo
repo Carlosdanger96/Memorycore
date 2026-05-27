@@ -1,12 +1,312 @@
--- CozoDB Schema for Memorycore
+-- SEARCH FUNCTIONS
+-- ============================================================================
+
+-- Full-text search function
+:func ft_search_memories(query: str, project_id: ?str, status: ?str, tags: ?[str], limit: ?i64, offset: ?i64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    summary: str,
+    tags: [str],
+    confidence: f64,
+    trust_score: f64,
+    status: str,
+    created_at: str,
+    score: f64
+}] {
+    search ft_index_memories {
+        query: query,
+        limit: limit or 100,
+        offset: offset or 0
+    }
+    where project_id is null or project_id == project_id
+    where status is null or status == status
+    where tags is null or all(t in tags for t in tags)
+    order by score desc
+}
+
+-- Vector search function (placeholder - will be implemented later)
+-- :func vector_search_memories(query_embedding: [f32], limit: ?i64, project_id: ?str) -> [{
+--     memory_id: str,
+--     project_id: str,
+--     content: str,
+--     score: f64
+-- }] {
+--     search vector_index_memories {
+--         query: query_embedding,
+--         limit: limit or 100,
+--         filter: project_id is null or project_id == project_id
+--     }
+-- }
+=======
+-- ============================================================================
+-- SEARCH FUNCTIONS
+-- ============================================================================
+
+-- Full-text search function
+:func ft_search_memories(query: str, project_id: ?str, status: ?str, tags: ?[str], limit: ?i64, offset: ?i64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    summary: str,
+    tags: [str],
+    confidence: f64,
+    trust_score: f64,
+    status: str,
+    created_at: str,
+    score: f64
+}] {
+    search ft_index_memories {
+        query: query,
+        limit: limit or 100,
+        offset: offset or 0
+    }
+    where project_id is null or project_id == project_id
+    where status is null or status == status
+    where tags is null or all(t in tags for t in tags)
+    order by score desc
+}
+
+-- Vector search function
+-- Searches 768-dim float32 vectors using HNSW index with cosine similarity
+:func vector_search_memories(query_embedding: [f32], project_id: ?str, status: ?str, tags: ?[str], limit: ?i64, ef_search: ?i64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    summary: str,
+    tags: [str],
+    confidence: f64,
+    trust_score: f64,
+    status: str,
+    created_at: str,
+    score: f64  -- Cosine similarity score (0.0 to 1.0, higher is more similar)
+}] {
+    search vector_index_memories {
+        query: query_embedding,
+        limit: limit or 100,
+        ef: ef_search or 100
+    }
+    where project_id is null or project_id == project_id
+    where status is null or status == status
+    where tags is null or all(t in tags for t in tags)
+    order by score desc
+}
+
+-- Hybrid search function: combines vector + FTS
+-- Returns results that match either vector similarity or text query
+:func hybrid_search_memories(query: str, query_embedding: ?[f32], project_id: ?str, status: ?str, tags: ?[str], limit: ?i64, vector_weight: ?f64, text_weight: ?f64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    summary: str,
+    tags: [str],
+    confidence: f64,
+    trust_score: f64,
+    status: str,
+    created_at: str,
+    vector_score: ?f64,
+    text_score: ?f64,
+    combined_score: f64
+}] {
+    -- Get vector results if embedding provided
+    if query_embedding is not null {
+        vector_results := vector_search_memories(
+            query_embedding: query_embedding,
+            project_id: project_id,
+            status: status,
+            tags: tags,
+            limit: limit or 100,
+            ef_search: 100
+        )
+    } else {
+        vector_results := []
+    }
+    
+    -- Get text results if query provided
+    if query != "" and query is not null {
+        text_results := ft_search_memories(
+            query: query,
+            project_id: project_id,
+            status: status,
+            tags: tags,
+            limit: limit or 100,
+            offset: 0
+        )
+    } else {
+        text_results := []
+    }
+    
+    -- Combine and deduplicate results
+    combined := {}
+    
+    -- Add vector results
+    for vr in vector_results {
+        if vr.memory_id not in combined {
+            combined[vr.memory_id] := {
+                memory_id: vr.memory_id,
+                project_id: vr.project_id,
+                content: vr.content,
+                summary: vr.summary,
+                tags: vr.tags,
+                confidence: vr.confidence,
+                trust_score: vr.trust_score,
+                status: vr.status,
+                created_at: vr.created_at,
+                vector_score: vr.score,
+                text_score: 0.0,
+                combined_score: 0.0
+            }
+        }
+        combined[vr.memory_id].vector_score = vr.score
+    }
+    
+    -- Add text results
+    for tr in text_results {
+        if tr.memory_id not in combined {
+            combined[tr.memory_id] := {
+                memory_id: tr.memory_id,
+                project_id: tr.project_id,
+                content: tr.content,
+                summary: tr.summary,
+                tags: tr.tags,
+                confidence: tr.confidence,
+                trust_score: tr.trust_score,
+                status: tr.status,
+                created_at: tr.created_at,
+                vector_score: 0.0,
+                text_score: tr.score,
+                combined_score: 0.0
+            }
+        }
+        combined[tr.memory_id].text_score = tr.score
+    }
+    
+    -- Calculate combined scores with weights
+    results := []
+    for mem_id, data in combined {
+        v_score := data.vector_score or 0.0
+        t_score := data.text_score or 0.0
+        
+        -- Normalize scores to [0, 1] range
+        v_norm := v_score  -- Already 0-1 for cosine
+        t_norm := t_score / 100.0  -- FTS scores can be higher
+        
+        -- Apply weights (default: equal weight)
+        v_weight := vector_weight or 0.5
+        t_weight := text_weight or 0.5
+        
+        -- Combined score (weighted sum)
+        combined_score := (v_norm * v_weight) + (t_norm * t_weight)
+        
+        results.append({
+            memory_id: data.memory_id,
+            project_id: data.project_id,
+            content: data.content,
+            summary: data.summary,
+            tags: data.tags,
+            confidence: data.confidence,
+            trust_score: data.trust_score,
+            status: data.status,
+            created_at: data.created_at,
+            vector_score: v_score,
+            text_score: t_score,
+            combined_score: combined_score
+        })
+    }
+    
+    -- Sort by combined score descending
+    order by combined_score desc
+    limit limit or 100
+}
+
+-- Nearest neighbor search with filters
+:func nn_search_memories(query_embedding: [f32], project_id: str, limit: ?i64, min_score: ?f64) -> [{
+    memory_id: str,
+    project_id: str,
+    content: str,
+    score: f64
+}] {
+    search vector_index_memories {
+        query: query_embedding,
+        limit: limit or 100,
+        ef: 100,
+        filter: project_id == project_id
+    }
+    where score >= (min_score or 0.0)
+    order by score desc
+}INDEXES
+-- ============================================================================
+
+-- Full-Text Search Index on memories
+:create ft_index_memories {
+    source: memories,
+    index content,
+    index summary,
+    index tags,
+    index memory_type,
+    index project_id
+}
+
+-- Vector index placeholder (HNSW) - will be implemented after core functionality
+-- :create vector_index_memories {
+--     source: memories,
+--     index embedding: vector(f32, 768),
+--     algorithm: hnsw,
+--     metric: cosine
+-- }
+=======
+-- ============================================================================
+-- INDEXES
+-- ============================================================================
+
+-- Full-Text Search Index on memories
+:create ft_index_memories {
+    source: memories,
+    index content,
+    index summary,
+    index tags,
+    index memory_type,
+    index project_id
+}
+
+-- HNSW Vector Index for semantic search
+-- 768-dimensional float32 vectors (sentence-transformers compatible)
+-- M=16: Maximum number of bidirectional links per node
+-- efConstruction=200: Construction time search depth (higher = better quality, slower)
+-- metric: cosine similarity
+:create vector_index_memories {
+    source: memories,
+    index vector_embedding: vector(f32, 768),
+    algorithm: hnsw,
+    metric: cosine,
+    M: 16,
+    efConstruction: 200
+}
+
+-- Hybrid index combining FTS and vector search
+-- Allows filtering by project_id, status, tags while searching vectors
+:create hybrid_index_memories {
+    source: memories,
+    index content,
+    index summary,
+    index tags,
+    index memory_type,
+    index project_id,
+    index vector_embedding: vector(f32, 768),
+    algorithm: hnsw,
+    metric: cosine,
+    M: 16,
+    efConstruction: 200
+}CozoDB Schema for Memorycore
 -- Primary memory store: graph/relation/vector/FTS
--- Version: 1.0.0
+-- Version: 2.0.0 - Phase 3: Vector Search
 
 -- ============================================================================
 -- CORE TABLES
 -- ============================================================================
 
 -- Memories table - stores all memory records
+-- Vector embeddings: 768-dim float32 vectors (sentence-transformers compatible)
 ?memories[
     memory_id: str,
     project_id: str,
@@ -24,6 +324,7 @@
     approval_status: str,
     updated_at: str,
     version: i64,
+    vector_embedding: [f32],  -- 768-dim float32 vector for semantic search
     PRIMARY KEY memory_id
 ]
 
