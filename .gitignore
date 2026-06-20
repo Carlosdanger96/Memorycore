@@ -1,3 +1,39 @@
-memorycore.db
+# env
+.env
+.env.*
+.venv/
+venv/
+
+# databases / local state
+*.db
+*.sqlite
+*.sqlite3
+*.cozo
+*.wal
+*.shm
+
+# python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# tooling
+.mypy_cache/
+.ruff_cache/
+.vscode/
+.idea/
+
+# logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

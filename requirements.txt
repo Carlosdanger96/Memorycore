@@ -1,17 +1,16 @@
-# Memory Core Phase 1 & 2 Dependencies
+# Memory Core Dependencies
+# For full dependency management, use pyproject.toml
+# Install with: pip install -e ".[dev,test]"
 
-# MCP Server
+# Core dependencies (also in pyproject.toml)
 mcp>=1.0.0
-
-# For YAML config loading
 pyyaml>=6.0
+numpy>=1.24.0
 
-# For Postgres support (Phase 2)
-psycopg2-binary>=2.9.9
+# Optional dependencies
+# psycopg2-binary>=2.9.9  # For Postgres support
+# cozo>=0.1.0  # For CozoDB support
 
-# For connection pooling (optional, recommended for production)
-# psycopg2-pool>=2.9.9
-
-# For testing
+# Development dependencies
 pytest>=7.0
 pytest-cov>=4.0

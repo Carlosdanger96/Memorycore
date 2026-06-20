@@ -232,21 +232,40 @@ Designed to be used by multiple agents, not tied to any specific agent framework
 
 ### New Files:
 1. `docs/ARCHITECTURE_V2.md` - Comprehensive architecture document
-2. `server/memory_types.py` - Memory types and data structures
-3. `server/graph_memory.py` - Graph memory layer
-4. `server/consolidator.py` - Consolidation engine
-5. `server/memory_engine_v2.py` - Memory Engine v2
-6. `server/mcp_server_v2.py` - MCP Server v2
+2. `memorycore/memory_types.py` - Memory types and data structures
+3. `memorycore/graph_memory.py` - Graph memory layer
+4. `memorycore/consolidator.py` - Consolidation engine
+5. `memorycore/memory_engine_v2.py` - Memory Engine v2
+6. `memorycore/mcp_server_v2.py` - MCP Server v2
 
 ### Modified Files:
-- None yet (new files are additive)
+- `server/` directory restructured as `memorycore/` package with proper relative imports
+- Added `pyproject.toml` for modern dependency management
+- Added `.github/workflows/tests.yml` for CI
+- Updated `.gitignore` with comprehensive exclusions
+- Fixed CozoDB schema merge conflicts and filter parameter naming
+
+### Status
+**Current Status:** Active prototype / v2 foundation
+
+**Stable today:**
+- Memory card types and data structures
+- Episode records and audit logging
+- SQLite/Postgres-oriented storage
+- MCP v2 tool surface (14 tools)
+
+**Experimental:**
+- CozoDB graph/vector schema
+- Automatic consolidation
+- HNSW retrieval
+- Cross-agent policy enforcement
 
 ## Usage Examples
 
 ### Recording an Episode
 
 ```python
-from server.memory_engine_v2 import create_memory_engine_v2
+from memorycore.memory_engine_v2 import create_memory_engine_v2
 
 engine = create_memory_engine_v2()
 
