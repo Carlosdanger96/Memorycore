@@ -278,6 +278,119 @@ class MemoryRanker:
         """
         self.rrf_ranker = RRFRanker(k=rrf_k)
 
+    def rank_results(
+        self,
+        keyword_results: Optional[List[Tuple[str, float]]] = None,
+        vector_results: Optional[List[Tuple[str, float]]] = None,
+        graph_results: Optional[List[Tuple[str, float]]] = None,
+        confidence_scores: Optional[Dict[str, float]] = None,
+        trust_scores: Optional[Dict[str, float]] = None,
+        limit: int = 100,
+    ) -> RRFResult:
+        """Rank memories using multiple signals.
+        
+        Args:
+            keyword_results: Results from FTS search as (memory_id, score) tuples
+            vector_results: Results from vector search as (memory_id, score) tuples
+            graph_results: Results from graph analysis as (memory_id, score) tuples
+            confidence_scores: Dictionary of memory_id -> confidence score
+            trust_scores: Dictionary of memory_id -> trust score
+            limit: Maximum number of results to return
+            
+        Returns:
+            RRFResult with fused ranking
+        """
+        result_sets = []
+        
+        # Add keyword results
+        if keyword_results:
+            result_sets.append(("keyword", keyword_results))
+        
+        # Add vector results
+        if vector_results:
+            result_sets.append(("vector", vector_results))
+        
+        # Add graph results
+        if graph_results:
+            result_sets.append(("graph", graph_results))
+        
+        # If we have result sets, fuse them with RRF
+        if result_sets:
+            rrf_result = self.rrf_ranker.fuse(result_sets, limit=limit * 2)
+        else:
+            # No search results, return empty
+            return RRFResult(results=[], total=0, k=self.rrf_ranker.k)
+        
+        # Apply confidence and trust boosts
+        if confidence_scores or trust_scores:
+            for result in rrf_result.results:
+                memory_id = result.memory_id
+                
+                # Apply confidence boost
+                if confidence_scores and memory_id in confidence_scores:
+                    confidence_boost = confidence_scores[memory_id]
+                    result.score *= (1.0 + confidence_boost * 0.5)  # 50% max boost
+                    result.metadata["confidence_boost"] = confidence_boost
+                
+                # Apply trust boost
+                if trust_scores and memory_id in trust_scores:
+                    trust_boost = trust_scores[memory_id]
+                    result.score *= (1.0 + trust_boost * 0.3)  # 30% max boost
+                    result.metadata["trust_boost"] = trust_boost
+        
+        # Re-sort by final score
+        rrf_result.results.sort(key=lambda r: r.score, reverse=True)
+        
+        # Re-set ranks
+        for i, result in enumerate(rrf_result.results, 1):
+            result.rank = i
+        
+        # Limit to requested size
+        rrf_result.results = rrf_result.results[:limit]
+        rrf_result.total = len(rrf_result.results)
+        
+        return rrf_result
+
+    def rank_with_weights(
+        self,
+        keyword_results: Optional[List[Tuple[str, float]]] = None,
+        vector_results: Optional[List[Tuple[str, float]]] = None,
+        graph_results: Optional[List[Tuple[str, float]]] = None,
+        keyword_weight: float = 1.0,
+        vector_weight: float = 1.0,
+        graph_weight: float = 1.0,
+        limit: int = 100,
+    ) -> RRFResult:
+        """Rank memories with custom weights for each search method.
+        
+        Args:
+            keyword_results: Results from FTS search
+            vector_results: Results from vector search
+            graph_results: Results from graph analysis
+            keyword_weight: Weight for keyword search (default 1.0)
+            vector_weight: Weight for vector search (default 1.0)
+            graph_weight: Weight for graph search (default 1.0)
+            limit: Maximum number of results to return
+            
+        Returns:
+            RRFResult with fused ranking
+        """
+        result_sets = []
+        
+        if keyword_results:
+            result_sets.append(("keyword", keyword_results, keyword_weight))
+        
+        if vector_results:
+            result_sets.append(("vector", vector_results, vector_weight))
+        
+        if graph_results:
+            result_sets.append(("graph", graph_results, graph_weight))
+        
+        if not result_sets:
+            return RRFResult(results=[], total=0, k=self.rrf_ranker.k)
+        
+        return self.rrf_ranker.fuse_with_weights(result_sets, limit=limit)
+
 
 class HybridRRFRanker:
     """Hybrid RRF ranker for combining vector, text, and graph results.
