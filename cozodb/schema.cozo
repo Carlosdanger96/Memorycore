@@ -188,9 +188,9 @@
 -- ============================================================================
 
 -- Rule: Get all memories for a project
-memories_by_project[project_id: str] <-
+memories_by_project[filter_project_id: str] <-
     memories(project_id, memory_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
-    where project_id == project_id
+    where project_id == filter_project_id
 
 -- Rule: Get all active memories (not archived)
 active_memories[] <-
@@ -213,9 +213,9 @@ memories_by_tag[tag: str] <-
     where tag in tags
 
 -- Rule: Get memories by multiple tags (AND logic)
-memories_by_tags[tags: [str]] <-
+memories_by_tags[filter_tags: [str]] <-
     memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
-    where all(t in tags for t in tags)
+    where all(t in filter_tags for t in tags)
 
 -- Rule: Get memories created by a user
 memories_by_user[user_id: str] <-
@@ -457,9 +457,9 @@ unresolved_contradictions[] <-
 }
 
 -- Count memories by status
-:func count_memories_by_status(project_id: str, status: str) -> i64 {
+:func count_memories_by_status(project_id: str, filter_status: str) -> i64 {
     count(memories(project_id, memory_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
-        where status == status)
+        where status == filter_status)
 }
 
 -- Get all tags for a project

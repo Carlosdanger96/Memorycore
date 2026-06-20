@@ -1,6 +1,6 @@
 """Test that all server modules can be imported successfully."""
 
-import sys
+import pytest
 import importlib
 
 
@@ -37,7 +37,7 @@ def test_server_imports():
                 raise AssertionError(f"Failed to import {module_name}: {e}")
 
 
-def test_mcp_server_v2_tools():
+def test_mcp_server_v2_tools(tmp_path):
     """Test that MCP server v2 can be instantiated and has the expected tools."""
     try:
         from server.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
@@ -46,7 +46,7 @@ def test_mcp_server_v2_tools():
         # Create server instance (this should work without external dependencies)
         try:
             engine = create_memory_engine_v2()
-            audit_logger = JSONLAuditLogger("test-audit.jsonl")
+            audit_logger = JSONLAuditLogger(str(tmp_path / "test-audit.jsonl"))
             server = MemoryMCPServerV2(engine, audit_logger)
             
             # Check that the server has the expected tools
@@ -54,14 +54,13 @@ def test_mcp_server_v2_tools():
             print("✓ MCP Server V2 can be instantiated")
         except Exception as e:
             if "cozo" in str(e) or "CozoDB" in str(e):
-                print("⚠ CozoDB not available, skipping MCP Server V2 instantiation")
-                return
+                pytest.skip("CozoDB package not installed")
             else:
                 raise
                 
     except ImportError as e:
         if "mcp" in str(e):
-            print("⚠ MCP Server V2 import skipped (missing mcp dependency)")
+            pytest.skip("MCP library not installed")
         else:
             raise
 
