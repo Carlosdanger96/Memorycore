@@ -1,5 +1,6 @@
 """Test CozoDB schema loading and validation."""
 
+import pytest
 import os
 import tempfile
 from pathlib import Path
@@ -47,8 +48,7 @@ def test_cozo_schema_load():
     try:
         import cozo
     except ImportError:
-        print("⚠ Cozo not available, skipping schema load test")
-        return
+        pytest.skip("CozoDB package not installed")
     
     schema_path = Path(__file__).parent.parent / "cozodb" / "schema.cozo"
     

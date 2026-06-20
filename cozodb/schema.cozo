@@ -215,7 +215,7 @@ memories_by_tag[tag: str] <-
 -- Rule: Get memories by multiple tags (AND logic)
 memories_by_tags[filter_tags: [str]] <-
     memories(memory_id, project_id, content, source_refs, created_at, created_by, tags, confidence, status, memory_type, summary, raw_evidence_ref, trust_score, approval_status, updated_at, version)
-    where all(t in filter_tags for t in tags)
+    where all(t in tags for t in filter_tags)
 
 -- Rule: Get memories created by a user
 memories_by_user[user_id: str] <-
@@ -274,7 +274,7 @@ unresolved_contradictions[] <-
     }
     where filter_project_id is null or project_id == filter_project_id
     where filter_status is null or status == filter_status
-    where filter_tags is null or all(t in filter_tags for t in tags)
+    where filter_tags is null or all(t in tags for t in filter_tags)
     order by score desc
 }
 
@@ -299,7 +299,7 @@ unresolved_contradictions[] <-
     }
     where filter_project_id is null or project_id == filter_project_id
     where filter_status is null or status == filter_status
-    where filter_tags is null or all(t in filter_tags for t in tags)
+    where filter_tags is null or all(t in tags for t in filter_tags)
     order by score desc
 }
 
