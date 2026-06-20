@@ -1,5 +1,6 @@
 """Tests for MemoryController with CozoDB backend."""
 
+import importlib.util
 import os
 import tempfile
 import unittest
@@ -12,6 +13,13 @@ from controller import MemoryController, MemoryRecord, MemoryStatus, MemoryType
 from audit_jsonl import JSONLAuditLogger
 
 
+requires_cozo = unittest.skipUnless(
+    importlib.util.find_spec("cozo") is not None,
+    "CozoDB package not installed",
+)
+
+
+@requires_cozo
 class TestMemoryController(unittest.TestCase):
     """Test cases for MemoryController."""
 
