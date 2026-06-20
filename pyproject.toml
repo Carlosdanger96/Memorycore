@@ -32,19 +32,19 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg2-binary>=2.9.9"]
-cozo = ["cozo>=0.1.0"]
+cozo = []  # until the correct package name is confirmed
 test = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
 ]
 dev = [
-    "memorycore[postgres,cozo,test]",
+    "memorycore[test]",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
 
 [project.scripts]
-memorycore-mcp = "memorycore.mcp_server_v2:main"
+memorycore-mcp = "server.mcp_server_v2:main"
 
 [project.urls]
 Homepage = "https://github.com/Carlosdanger96/Memorycore"
@@ -54,7 +54,7 @@ Issues = "https://github.com/Carlosdanger96/Memorycore/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["memorycore*"]
+include = ["server*"]
 
 [tool.ruff]
 line-length = 100

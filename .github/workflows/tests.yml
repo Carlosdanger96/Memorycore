@@ -17,5 +17,5 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -U pip
       - run: pip install -e ".[dev,test]"
-      - run: python -m compileall memorycore tests
+      - run: python -m compileall server tests
       - run: pytest -q

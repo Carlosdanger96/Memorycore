@@ -41,7 +41,7 @@ pip install -e ".[postgres,cozo]"
 
 ```bash
 # Run the MCP server (v2)
-python -m memorycore.mcp_server_v2 --db-path memorycore.cozo --schema-path cozodb/schema.cozo
+python -m server.mcp_server_v2 --db-path memorycore.cozo --schema-path cozodb/schema.cozo
 
 # Or use the entry point (after installation)
 memorycore-mcp --db-path memorycore.cozo --schema-path cozodb/schema.cozo
@@ -50,8 +50,8 @@ memorycore-mcp --db-path memorycore.cozo --schema-path cozodb/schema.cozo
 ### Storing One Memory
 
 ```python
-from memorycore.memory_engine_v2 import create_memory_engine_v2
-from memorycore.memory_types import MemoryCard, MemoryType, MemoryStatus
+from server.memory_engine_v2 import create_memory_engine_v2
+from server.memory_types import MemoryCard, MemoryType, MemoryStatus
 
 # Create the engine
 engine = create_memory_engine_v2()
@@ -159,7 +159,7 @@ LLM / Agent / Tool Client
 ## Project Structure
 
 ```
-memorycore/
+server/
 ├── __init__.py           # Package exports
 ├── memory_types.py       # Memory data structures
 ├── memory_engine.py      # Legacy memory engine
@@ -185,17 +185,24 @@ cozodb/
 
 docs/
 ├── ARCHITECTURE_V2.md    # Architecture documentation
+├── STORAGE_BOUNDARIES.md # Storage backend responsibilities
 └── memory-schema.md      # Memory schema documentation
 
 tests/
 ├── test_imports.py       # Import tests
 ├── test_cozo_schema.py   # Cozo schema tests
+├── test_mcp_server_v2.py # MCP server v2 smoke tests
 └── ...                  # Other tests
 
 .github/
 └── workflows/
     └── tests.yml         # CI configuration
+
+pyproject.toml           # Package configuration
+requirements.txt          # Legacy requirements
 ```
+
+**Note:** The `server/` package is the current primary package. A future cleanup will migrate to a proper `memorycore/` package structure.
 
 ## Design Principles
 

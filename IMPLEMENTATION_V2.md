@@ -232,18 +232,19 @@ Designed to be used by multiple agents, not tied to any specific agent framework
 
 ### New Files:
 1. `docs/ARCHITECTURE_V2.md` - Comprehensive architecture document
-2. `memorycore/memory_types.py` - Memory types and data structures
-3. `memorycore/graph_memory.py` - Graph memory layer
-4. `memorycore/consolidator.py` - Consolidation engine
-5. `memorycore/memory_engine_v2.py` - Memory Engine v2
-6. `memorycore/mcp_server_v2.py` - MCP Server v2
+2. `docs/STORAGE_BOUNDARIES.md` - Storage backend responsibilities and interfaces
+3. `pyproject.toml` - Modern dependency management
+4. `.github/workflows/tests.yml` - CI configuration
+5. `tests/test_imports.py` - Import smoke tests
+6. `tests/test_cozo_schema.py` - Cozo schema validation
+7. `tests/test_mcp_server_v2.py` - MCP server v2 smoke tests
 
 ### Modified Files:
-- `server/` directory restructured as `memorycore/` package with proper relative imports
-- Added `pyproject.toml` for modern dependency management
-- Added `.github/workflows/tests.yml` for CI
-- Updated `.gitignore` with comprehensive exclusions
-- Fixed CozoDB schema merge conflicts and filter parameter naming
+- `.gitignore` - Enhanced with comprehensive exclusions
+- `cozodb/schema.cozo` - Fixed merge conflicts and filter parameter naming
+- `requirements.txt` - Updated to reference pyproject.toml
+- `IMPLEMENTATION_V2.md` - Corrected claims and status
+- `README.md` - Rewritten with accurate status and quickstart
 
 ### Status
 **Current Status:** Active prototype / v2 foundation
@@ -259,6 +260,8 @@ Designed to be used by multiple agents, not tied to any specific agent framework
 - Automatic consolidation
 - HNSW retrieval
 - Cross-agent policy enforcement
+
+**Note:** The `server/` package remains the primary package. A future PR will migrate to a proper `memorycore/` package structure.
 
 ## Usage Examples
 

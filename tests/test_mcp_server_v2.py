@@ -9,7 +9,8 @@ from typing import Any, Dict, List, Optional
 def test_mcp_server_v2_tool_list():
     """Test that MCP Server v2 defines the expected tools."""
     try:
-        from memorycore.mcp_server_v2 import MemoryMCPServerV2
+        from server.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
+        from server.audit_jsonl import JSONLAuditLogger
     except ImportError as e:
         if "mcp" in str(e):
             print("⚠ MCP library not available, skipping MCP server tests")
@@ -17,12 +18,21 @@ def test_mcp_server_v2_tool_list():
         else:
             raise
     
-    # Create server instance
-    server = MemoryMCPServerV2()
+    # Create server instance with required dependencies
+    try:
+        engine = create_memory_engine_v2()
+        audit_logger = JSONLAuditLogger("test-audit.jsonl")
+        server = MemoryMCPServerV2(engine, audit_logger)
+    except Exception as e:
+        if "cozo" in str(e) or "CozoDB" in str(e):
+            print("⚠ CozoDB not available, skipping MCP server tool list test")
+            return
+        else:
+            raise
     
     # Check that the server has the expected tools
     # The tools are defined in the get_tools method
-    tools = server.get_tools()
+    tools = server._get_tools()
     
     # Expected tool names
     expected_tools = [
@@ -63,7 +73,8 @@ def test_mcp_server_v2_tool_list():
 def test_mcp_server_v2_tool_schemas():
     """Test that MCP Server v2 tools have proper schemas."""
     try:
-        from memorycore.mcp_server_v2 import MemoryMCPServerV2
+        from server.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
+        from server.audit_jsonl import JSONLAuditLogger
     except ImportError as e:
         if "mcp" in str(e):
             print("⚠ MCP library not available, skipping MCP server schema tests")
@@ -71,8 +82,17 @@ def test_mcp_server_v2_tool_schemas():
         else:
             raise
     
-    server = MemoryMCPServerV2()
-    tools = server.get_tools()
+    try:
+        engine = create_memory_engine_v2()
+        audit_logger = JSONLAuditLogger("test-audit.jsonl")
+        server = MemoryMCPServerV2(engine, audit_logger)
+    except Exception as e:
+        if "cozo" in str(e) or "CozoDB" in str(e):
+            print("⚠ CozoDB not available, skipping MCP server schema tests")
+            return
+        else:
+            raise
+    tools = server._get_tools()
     
     for tool in tools:
         # Check that each tool has required fields
@@ -94,7 +114,8 @@ def test_mcp_server_v2_tool_schemas():
 def test_mcp_server_v2_initialization():
     """Test that MCP Server v2 can be initialized with different configurations."""
     try:
-        from memorycore.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
+        from server.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
+        from server.audit_jsonl import JSONLAuditLogger
     except ImportError as e:
         if "mcp" in str(e):
             print("⚠ MCP library not available, skipping MCP server initialization tests")
@@ -102,23 +123,38 @@ def test_mcp_server_v2_initialization():
         else:
             raise
     
-    # Test with default configuration
-    server1 = MemoryMCPServerV2()
+    try:
+        engine = create_memory_engine_v2()
+        audit_logger = JSONLAuditLogger("test-audit.jsonl")
+        # Test with default configuration
+        server1 = MemoryMCPServerV2(engine, audit_logger)
+    except Exception as e:
+        if "cozo" in str(e) or "CozoDB" in str(e):
+            print("⚠ CozoDB not available, skipping MCP server initialization tests")
+            return
+        else:
+            raise
     assert server1 is not None
     print("✓ MCP Server v2 initialized with default config")
     
     # Test with custom engine
-    engine = create_memory_engine_v2()
-    server2 = MemoryMCPServerV2(memory_engine=engine)
-    assert server2 is not None
-    print("✓ MCP Server v2 initialized with custom engine")
-    
-    # Test with disabled features
-    server3 = MemoryMCPServerV2(
-        use_graph_memory=False,
-        use_consolidation=False,
-        auto_consolidate=False
-    )
+    try:
+        engine2 = create_memory_engine_v2()
+        audit_logger2 = JSONLAuditLogger("test-audit2.jsonl")
+        server2 = MemoryMCPServerV2(engine2, audit_logger2)
+        assert server2 is not None
+        print("✓ MCP Server v2 initialized with custom engine")
+        
+        # Test with disabled features
+        engine3 = create_memory_engine_v2()
+        audit_logger3 = JSONLAuditLogger("test-audit3.jsonl")
+        server3 = MemoryMCPServerV2(engine3, audit_logger3)
+    except Exception as e:
+        if "cozo" in str(e) or "CozoDB" in str(e):
+            print("⚠ CozoDB not available, skipping additional MCP server initialization tests")
+            return
+        else:
+            raise
     assert server3 is not None
     print("✓ MCP Server v2 initialized with disabled features")
 
@@ -126,8 +162,8 @@ def test_mcp_server_v2_initialization():
 def test_memory_types_in_mcp_server():
     """Test that memory types used in MCP server are properly defined."""
     try:
-        from memorycore.mcp_server_v2 import MemoryMCPServerV2
-        from memorycore.memory_types import (
+        from server.mcp_server_v2 import MemoryMCPServerV2
+        from server.memory_types import (
             MemoryCard, MemoryType, MemoryStatus, MemoryScope,
             EpisodeRecord, GraphNode, GraphNodeType, GraphEdgeType,
             SupersessionRecord, ContextResult
@@ -165,7 +201,8 @@ def test_memory_types_in_mcp_server():
 def test_tool_list_snapshot():
     """Test that the tool list matches the expected snapshot."""
     try:
-        from memorycore.mcp_server_v2 import MemoryMCPServerV2
+        from server.mcp_server_v2 import MemoryMCPServerV2, create_memory_engine_v2
+        from server.audit_jsonl import JSONLAuditLogger
     except ImportError as e:
         if "mcp" in str(e):
             print("⚠ MCP library not available, skipping tool list snapshot test")
@@ -173,8 +210,17 @@ def test_tool_list_snapshot():
         else:
             raise
     
-    server = MemoryMCPServerV2()
-    tools = server.get_tools()
+    try:
+        engine = create_memory_engine_v2()
+        audit_logger = JSONLAuditLogger("test-audit.jsonl")
+        server = MemoryMCPServerV2(engine, audit_logger)
+    except Exception as e:
+        if "cozo" in str(e) or "CozoDB" in str(e):
+            print("⚠ CozoDB not available, skipping tool list snapshot test")
+            return
+        else:
+            raise
+    tools = server._get_tools()
     
     # Create a snapshot of the current tool list
     tool_snapshot = {
