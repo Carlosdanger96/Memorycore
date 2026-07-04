@@ -2,28 +2,48 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Sequence
 
-from .mcp_server import default_database_path, run_server
 from .memory_service import MemoryService
+
+
+def default_database_path() -> Path:
+    configured = os.getenv("MEMORYCORE_DB")
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / ".memorycore" / "memorycore.db"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memorycore")
     parser.add_argument("--db", type=Path, default=default_database_path())
     subcommands = parser.add_subparsers(dest="command", required=True)
-    subcommands.add_parser("init", help="create or migrate the SQLite database")
+    subcommands.add_parser("init", help="create or initialize the SQLite database")
     subcommands.add_parser("doctor", help="verify SQLite and FTS5 health")
-    subcommands.add_parser("serve", help="run the stdio MCP server")
+    subcommands.add_parser("serve", help="run the optional stdio MCP server")
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
     if args.command == "serve":
+        try:
+            from .mcp_server import run_server
+        except ModuleNotFoundError as exc:
+            if exc.name == "mcp":
+                print(
+                    "MCP support is optional. Install it with: pip install -e \".[mcp]\"",
+                    file=sys.stderr,
+                )
+                return 2
+            raise
         run_server(args.db)
         return 0
+
     service = MemoryService(args.db)
     try:
         result = service.health()
