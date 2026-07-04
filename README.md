@@ -1,51 +1,66 @@
 # Memorycore
 
-Memorycore is a local-first external memory layer for general LLM use. It gives different models, agents, CLIs, and applications access to the same durable memory without tying the memory to one provider or one chat interface.
-
-## Current status
-
-Memorycore is being simplified into its first working version. The canonical v0.1 architecture is:
+Memorycore is a local-first external memory layer for general LLM use. Version 0.1 uses one durable SQLite database, one `MemoryService`, and one MCP access layer.
 
 ```text
 LLM or agent
     ↓
-MCP Server
+MCP server
     ↓
 MemoryService
     ↓
 SQLite + FTS5
 ```
 
-The current repository still contains unfinished v1/v2 experimental code. That code is not yet the supported runtime. The preserved experimental snapshot is available in the `archive/pre-v0.1-experimental` branch.
+## Status
 
-`main` is now the target for the working SQLite + `MemoryService` + MCP implementation.
+This repository now contains the canonical v0.1 implementation. It is not a stable release until GitHub Actions and Windows MCP validation pass. The previous experimental implementation remains preserved on the `archive/pre-v0.1-experimental` branch.
 
-## The actual core
+## Requirements and downloads
 
-### SQLite
+Required:
 
-SQLite stores memory durably. It is the canonical local store for v0.1.
+- Python 3.11 or newer: https://www.python.org/downloads/
+- Git: https://git-scm.com/downloads
 
-Memorycore will use Python's built-in `sqlite3` module, so a separate SQLite server is not required.
+Installed with Memorycore:
 
-### MemoryService
+- MCP Python SDK: https://github.com/modelcontextprotocol/python-sdk
 
-`MemoryService` owns normal memory behavior:
+Optional:
 
-- add a memory;
-- retrieve a memory by ID;
-- search and filter memories;
-- rank search results;
-- return compact context for an LLM;
-- update a memory;
-- archive a memory;
-- report storage health.
+- SQLite command-line tools: https://www.sqlite.org/download.html
+- uv: https://docs.astral.sh/uv/getting-started/installation/
 
-### MCP server
+Python already provides SQLite through the built-in `sqlite3` module. A separate database server is not required.
 
-The MCP server exposes `MemoryService` to LLMs and agents. It should contain no direct SQL or independent memory logic.
+## Install on Windows
 
-Initial MCP tools:
+```powershell
+git clone https://github.com/Carlosdanger96/Memorycore.git
+cd Memorycore
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -e ".[test]"
+memorycore --db .\data\memorycore.db init
+memorycore --db .\data\memorycore.db doctor
+```
+
+## Run the MCP server
+
+```powershell
+memorycore --db .\data\memorycore.db serve
+```
+
+Or set the database path once:
+
+```powershell
+$env:MEMORYCORE_DB = "$PWD\data\memorycore.db"
+memorycore-mcp
+```
+
+The stdio MCP server exposes:
 
 - `memory_add`
 - `memory_get`
@@ -55,162 +70,32 @@ Initial MCP tools:
 - `memory_archive`
 - `memory_health`
 
-## v0.1 completion standard
+## Python usage
 
-The first usable release will be tagged `v0.1.0` when all of the following work:
+```python
+from memorycore import MemoryService
 
-1. SQLite stores memory.
-2. Memory survives a process restart.
-3. `MemoryService` can add, get, search, filter, rank, update, and archive memory.
-4. MCP exposes those operations.
-5. Project-scoped retrieval works.
-6. The test suite proves the full persistence and MCP flow.
-7. Installation, backup, restore, and troubleshooting instructions are accurate.
-
-Required proof flow:
-
-```text
-create database
-→ start Memorycore
-→ add memory through the service or MCP
-→ retrieve memory
-→ stop Memorycore
-→ restart Memorycore
-→ retrieve the same memory again
+service = MemoryService("data/memorycore.db")
+memory = service.add_memory(project_id="example", memory_type="decision",
+    content="SQLite is the canonical v0.1 store.", tags=["storage"])
+context = service.retrieve_context(query="canonical store", project_id="example")
+print(context["context_text"])
+service.close()
 ```
 
-## Requirements and downloads
+## Test
 
-### Required
-
-- Python 3.11 or newer  
-  https://www.python.org/downloads/
-
-- Git  
-  https://git-scm.com/downloads
-
-### Installed with Memorycore
-
-- Model Context Protocol Python SDK  
-  https://github.com/modelcontextprotocol/python-sdk
-
-The MCP SDK should be installed through the project's Python dependencies rather than downloaded manually.
-
-### Optional
-
-- SQLite command-line tools  
-  https://www.sqlite.org/download.html
-
-  Python already includes SQLite access through `sqlite3`. The command-line tools are only needed for manual database inspection or repair.
-
-- uv package manager  
-  https://docs.astral.sh/uv/getting-started/installation/
-
-  `uv` is optional. Standard Python virtual environments and `pip` remain supported.
-
-## Verify local requirements
-
-```bash
-python --version
-git --version
-python -c "import sqlite3; print(sqlite3.sqlite_version)"
+```powershell
+python -m compileall src tests
+pytest
 ```
 
-## Planned project structure
+The test suite covers SQLite CRUD, FTS5 search, project scoping, update/archive behavior, restart persistence, and the MCP adapter.
 
-```text
-Memorycore/
-├── pyproject.toml
-├── src/
-│   └── memorycore/
-│       ├── __init__.py
-│       ├── models.py
-│       ├── database.py
-│       ├── memory_service.py
-│       ├── retrieval.py
-│       ├── mcp_server.py
-│       └── cli.py
-├── migrations/
-│   └── 001_initial.sql
-├── tests/
-│   ├── test_database.py
-│   ├── test_memory_service.py
-│   ├── test_retrieval.py
-│   ├── test_persistence.py
-│   └── test_mcp.py
-└── docs/
-    ├── DESIGN_DECISIONS.md
-    └── FUTURE_ROADMAP.md
-```
+## v0.1.0 release gate
 
-This structure describes the implementation target. Some files do not exist yet.
-
-## Initial memory model
-
-```text
-Memory
-├── id
-├── project_id
-├── memory_type
-├── content
-├── summary
-├── tags
-├── status
-├── created_by
-├── metadata
-├── created_at
-└── updated_at
-```
-
-Initial memory types:
-
-- `fact`
-- `decision`
-- `preference`
-- `procedure`
-- `correction`
-- `note`
-
-Initial statuses:
-
-- `active`
-- `archived`
-- `superseded`
-
-## Initial retrieval
-
-```text
-query
-→ restrict to project_id
-→ restrict to active memories
-→ search SQLite FTS5
-→ rank results
-→ return the best memories
-```
-
-No embedding model or vector database is required for v0.1.
+The `v0.1.0` tag should be created only after GitHub Actions passes, restart persistence is verified, an actual Windows MCP client can access the same memory, and setup instructions are confirmed.
 
 ## Deferred work
 
-The following ideas remain part of Memorycore's longer-term direction, but they are not part of the first working core:
-
-- write-candidate approval;
-- detailed audit and permissions;
-- source and evidence graphs;
-- automatic consolidation;
-- contradiction and duplicate detection;
-- embeddings and semantic retrieval;
-- graph traversal and CozoDB;
-- PostgreSQL;
-- multi-device synchronization;
-- Obsidian, browser, and messaging integrations;
-- Mojo components;
-- learned-memory models.
-
-See [Design Decisions](docs/DESIGN_DECISIONS.md) and the [Future Roadmap](docs/FUTURE_ROADMAP.md).
-
-## Development workflow
-
-The active implementation can be built and tested on a temporary feature branch, then merged into `main` after the complete persistence and MCP tests pass.
-
-The resulting working implementation becomes the canonical version on `main`; it is not intended to remain as a permanent alternate branch.
+Vectors, embeddings, CozoDB, graph traversal, PostgreSQL, automatic consolidation, learned memory, multi-device sync, and advanced policy controls remain deferred. See [Design Decisions](docs/DESIGN_DECISIONS.md) and [Future Roadmap](docs/FUTURE_ROADMAP.md).
