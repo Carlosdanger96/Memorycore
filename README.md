@@ -1,65 +1,216 @@
 # Memorycore
 
-Memorycore is a durable memory layer for LLM and multi-agent systems. Its purpose is to give different models and tools access to the same structured memory store through a controlled interface, instead of relying only on chat history, hidden app memory, or one model's local context.
+Memorycore is a local-first external memory layer for general LLM use. It gives different models, agents, CLIs, and applications access to the same durable memory without tying the memory to one provider or one chat interface.
 
-The basic idea is:
+## Current status
+
+Memorycore is being simplified into its first working version. The canonical v0.1 architecture is:
 
 ```text
-LLM / agent / tool client
-        ↓
-MCP interface
-        ↓
-Memorycore service
-        ↓
-search + ranking + write candidates + audit
-        ↓
-structured memory store
+LLM or agent
+    ↓
+MCP Server
+    ↓
+MemoryService
+    ↓
+SQLite + FTS5
 ```
 
-## Core purpose
+The current repository still contains unfinished v1/v2 experimental code. That code is not yet the supported runtime. The preserved experimental snapshot is available in the `archive/pre-v0.1-experimental` branch.
 
-Memorycore is meant to store and retrieve useful long-term project memory:
+`main` is now the target for the working SQLite + `MemoryService` + MCP implementation.
 
-- project facts
-- decisions
-- design notes
-- source references
-- summaries
-- memory candidates
-- audit records
-- confidence and trust metadata
-- later: embeddings, ranking scores, deduplication data, and experimental symbolic indexes
+## The actual core
 
-It should act as an external memory backbone that multiple LLMs can access through MCP or other APIs.
+### SQLite
 
-## MVP scope
+SQLite stores memory durably. It is the canonical local store for v0.1.
 
-The first version should stay small:
+Memorycore will use Python's built-in `sqlite3` module, so a separate SQLite server is not required.
 
-1. MCP server exposing memory tools.
-2. Structured memory schema.
-3. Search/read memory function.
-4. Write-candidate workflow instead of uncontrolled direct writes.
-5. Audit log for reads, proposed writes, accepted writes, rejected writes, and edits.
-6. Project-scoped memory retrieval.
+### MemoryService
 
-The MVP should not attempt to solve model training, autonomous self-replication, full agent orchestration, or symbolic glyph compression.
+`MemoryService` owns normal memory behavior:
 
-## Non-MVP experiments
+- add a memory;
+- retrieve a memory by ID;
+- search and filter memories;
+- rank search results;
+- return compact context for an LLM;
+- update a memory;
+- archive a memory;
+- report storage health.
 
-Some ideas belong in experiments, not the core product:
+### MCP server
 
-- glyph memory compression
-- swarm/blackboard memory coordination
-- agent-lineage simulation memory
-- Lisp + Mojo hybrid language concepts
-- nano-LLM memory workers
-- local model memory distillation
+The MCP server exposes `MemoryService` to LLMs and agents. It should contain no direct SQL or independent memory logic.
 
-These can be documented and tested separately, but the canonical memory source should remain readable structured text plus raw evidence references.
+Initial MCP tools:
 
-## Design rule
+- `memory_add`
+- `memory_get`
+- `memory_search`
+- `memory_retrieve_context`
+- `memory_update`
+- `memory_archive`
+- `memory_health`
 
-Decentralize sensing and reasoning. Centralize state, memory, permissions, and audit.
+## v0.1 completion standard
 
-Agents may search, summarize, classify, and propose memory updates. Memorycore should control the durable store, permissions, accepted writes, and audit trail.
+The first usable release will be tagged `v0.1.0` when all of the following work:
+
+1. SQLite stores memory.
+2. Memory survives a process restart.
+3. `MemoryService` can add, get, search, filter, rank, update, and archive memory.
+4. MCP exposes those operations.
+5. Project-scoped retrieval works.
+6. The test suite proves the full persistence and MCP flow.
+7. Installation, backup, restore, and troubleshooting instructions are accurate.
+
+Required proof flow:
+
+```text
+create database
+→ start Memorycore
+→ add memory through the service or MCP
+→ retrieve memory
+→ stop Memorycore
+→ restart Memorycore
+→ retrieve the same memory again
+```
+
+## Requirements and downloads
+
+### Required
+
+- Python 3.11 or newer  
+  https://www.python.org/downloads/
+
+- Git  
+  https://git-scm.com/downloads
+
+### Installed with Memorycore
+
+- Model Context Protocol Python SDK  
+  https://github.com/modelcontextprotocol/python-sdk
+
+The MCP SDK should be installed through the project's Python dependencies rather than downloaded manually.
+
+### Optional
+
+- SQLite command-line tools  
+  https://www.sqlite.org/download.html
+
+  Python already includes SQLite access through `sqlite3`. The command-line tools are only needed for manual database inspection or repair.
+
+- uv package manager  
+  https://docs.astral.sh/uv/getting-started/installation/
+
+  `uv` is optional. Standard Python virtual environments and `pip` remain supported.
+
+## Verify local requirements
+
+```bash
+python --version
+git --version
+python -c "import sqlite3; print(sqlite3.sqlite_version)"
+```
+
+## Planned project structure
+
+```text
+Memorycore/
+├── pyproject.toml
+├── src/
+│   └── memorycore/
+│       ├── __init__.py
+│       ├── models.py
+│       ├── database.py
+│       ├── memory_service.py
+│       ├── retrieval.py
+│       ├── mcp_server.py
+│       └── cli.py
+├── migrations/
+│   └── 001_initial.sql
+├── tests/
+│   ├── test_database.py
+│   ├── test_memory_service.py
+│   ├── test_retrieval.py
+│   ├── test_persistence.py
+│   └── test_mcp.py
+└── docs/
+    ├── DESIGN_DECISIONS.md
+    └── FUTURE_ROADMAP.md
+```
+
+This structure describes the implementation target. Some files do not exist yet.
+
+## Initial memory model
+
+```text
+Memory
+├── id
+├── project_id
+├── memory_type
+├── content
+├── summary
+├── tags
+├── status
+├── created_by
+├── metadata
+├── created_at
+└── updated_at
+```
+
+Initial memory types:
+
+- `fact`
+- `decision`
+- `preference`
+- `procedure`
+- `correction`
+- `note`
+
+Initial statuses:
+
+- `active`
+- `archived`
+- `superseded`
+
+## Initial retrieval
+
+```text
+query
+→ restrict to project_id
+→ restrict to active memories
+→ search SQLite FTS5
+→ rank results
+→ return the best memories
+```
+
+No embedding model or vector database is required for v0.1.
+
+## Deferred work
+
+The following ideas remain part of Memorycore's longer-term direction, but they are not part of the first working core:
+
+- write-candidate approval;
+- detailed audit and permissions;
+- source and evidence graphs;
+- automatic consolidation;
+- contradiction and duplicate detection;
+- embeddings and semantic retrieval;
+- graph traversal and CozoDB;
+- PostgreSQL;
+- multi-device synchronization;
+- Obsidian, browser, and messaging integrations;
+- Mojo components;
+- learned-memory models.
+
+See [Design Decisions](docs/DESIGN_DECISIONS.md) and the [Future Roadmap](docs/FUTURE_ROADMAP.md).
+
+## Development workflow
+
+The active implementation can be built and tested on a temporary feature branch, then merged into `main` after the complete persistence and MCP tests pass.
+
+The resulting working implementation becomes the canonical version on `main`; it is not intended to remain as a permanent alternate branch.
