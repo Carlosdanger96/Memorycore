@@ -8,10 +8,12 @@ version = "0.1.0.dev0"
 description = "Local-first SQLite memory service for LLMs and agents"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["mcp>=1,<2"]
+dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-asyncio>=0.23"]
+test = ["pytest>=8"]
+mcp = ["mcp>=1,<2"]
+mcp-test = ["memorycore[test,mcp]", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 memorycore = "memorycore.cli:main"
