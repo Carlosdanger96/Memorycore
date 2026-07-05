@@ -4,12 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   storage:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
