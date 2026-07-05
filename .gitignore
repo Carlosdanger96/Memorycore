@@ -1,13 +1,85 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
-.pytest_cache/
+.installed.cfg
+*.egg
+
+# Virtual environments
 .venv/
 venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Environment
 .env
+.venv
+.env.local
+.env.*.local
+
+# Database files
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
-dist/
-build/
+*.sqlite-shm
+*.sqlite-wal
+
+# Backup files
+*.bak
+*.backup
+backup/
+.backup/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local configuration
+.memorycore/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
