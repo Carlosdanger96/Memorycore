@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "memorycore"
 version = "0.1.0.dev0"
-description = "Local-first SQLite memory service for LLMs and agents"
+description = "Provider-neutral, local-first omni-memory core for LLMs, agents, and applications"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
