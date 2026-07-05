@@ -1,6 +1,36 @@
 # Memorycore
 
-Memorycore is a local-first external memory layer for general LLM use. Version 0.1 focuses on one durable SQLite database and one `MemoryService`.
+Memorycore is a local-first, provider-neutral omni-memory system. It gives multiple LLMs, agents, applications, and workflows access to the same durable and inspectable memory without making any one model, provider, chat interface, or agent framework the center of the system.
+
+Version 0.1 deliberately starts with one reliable storage core:
+
+```text
+ChatGPT / Mistral Vibe / Hermes / Codex / Gemini / local models / apps
+                                  ↓
+                         adapters and clients
+                                  ↓
+                           MemoryService
+                                  ↓
+                         SQLite + FTS5
+```
+
+The omni-memory is the product. Provider integrations are replaceable access layers around it.
+
+## What omni-memory means
+
+Memorycore is intended to:
+
+- preserve one canonical memory source that many authorized clients can share;
+- remain independent of model and provider APIs;
+- store facts, decisions, preferences, procedures, corrections, notes, and future memory types;
+- organize access by project today and by user, workspace, session, scope, and permissions in later phases;
+- retain provenance so the system can record where a memory came from without isolating it by provider;
+- expose the same memory through Python, CLI, MCP, HTTP, browser, messaging, and other adapters as those layers mature;
+- remain local-first, inspectable, exportable, and auditable.
+
+Memorycore is not an LLM router, chat application, model client, agent framework, or collection of separate provider-specific memory databases.
+
+## Current v0.1 implementation
 
 ```text
 Application, script, or future integration
@@ -10,7 +40,7 @@ MemoryService
 SQLite + FTS5
 ```
 
-MCP is deferred to a later integration phase. The current MCP adapter remains in the repository as optional work, but it is not required to install, initialize, test, or use the storage core.
+MCP is deferred to a later integration phase. The current MCP adapter remains optional and is not required to install, initialize, test, or use the storage core.
 
 ## Status
 
@@ -57,6 +87,12 @@ memory = service.add_memory(
     memory_type="decision",
     content="SQLite is the canonical v0.1 store.",
     tags=["storage"],
+    created_by="mistral-vibe",
+    metadata={
+        "source_provider": "mistral",
+        "source_client": "vibe",
+        "source_session": "optional-session-id",
+    },
 )
 context = service.retrieve_context(
     query="canonical store",
@@ -65,6 +101,8 @@ context = service.retrieve_context(
 print(context["context_text"])
 service.close()
 ```
+
+Provider and client names are provenance metadata. They do not create separate memory silos.
 
 ## Storage operations
 
@@ -109,6 +147,16 @@ The `v0.1.0` tag should be created only after:
 4. Backup and restore instructions are added and tested.
 5. Setup instructions are confirmed from a clean checkout.
 
-## Deferred work
+## Architecture guardrails
 
-MCP integration, vectors, embeddings, CozoDB, graph traversal, PostgreSQL, automatic consolidation, learned memory, multi-device sync, and advanced policy controls remain deferred. See [Design Decisions](docs/DESIGN_DECISIONS.md) and [Future Roadmap](docs/FUTURE_ROADMAP.md).
+All changes must preserve these rules:
+
+1. Memorycore remains provider-neutral.
+2. The canonical memory store remains readable and inspectable.
+3. Integrations call the core; they do not redefine the core.
+4. Provider identity is provenance metadata, not the primary memory namespace.
+5. New engines and dependencies remain optional until demonstrated necessary.
+6. Stable behavior, experimental behavior, and future ideas must be clearly separated.
+7. Durable memories are archived, corrected, or superseded rather than silently destroyed.
+
+See [Omni-Memory Scope](docs/OMNI_MEMORY_SCOPE.md), [Design Decisions](docs/DESIGN_DECISIONS.md), and [Future Roadmap](docs/FUTURE_ROADMAP.md).
