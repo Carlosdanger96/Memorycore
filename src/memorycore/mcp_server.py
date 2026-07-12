@@ -190,6 +190,9 @@ def create_server(service: MemoryService) -> FastMCP:
 
 
 def default_database_path() -> Path:
+    configured_url = os.getenv("MEMORYCORE_DATABASE_URL")
+    if configured_url:
+        return configured_url  # type: ignore[return-value]
     configured = os.getenv("MEMORYCORE_DB")
     return Path(configured).expanduser() if configured else Path.home() / ".memorycore" / "memorycore.db"
 
