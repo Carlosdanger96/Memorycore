@@ -94,6 +94,9 @@ class MemoryMCPAdapter:
                          confidence: float | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         self.policy.check_project(project_id)
+        duplicate = self.service.find_exact_duplicate(project_id=project_id, memory_type=memory_type, content=content)
+        if duplicate is not None:
+            raise ValueError(f"exact duplicate memory exists: {duplicate.id}")
         return self.service.add_memory(project_id=project_id, memory_type=memory_type,
             content=content, summary=summary, tags=tags, created_by=self.policy.client_id,
             metadata=metadata, client_id=self.policy.client_id,
