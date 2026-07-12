@@ -41,11 +41,17 @@ class PostgresDatabase:
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_memories_project_status ON memories(project_id, status)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_memories_project_type ON memories(project_id, memory_type)"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_memories_search ON memories USING GIN (to_tsvector('simple', content || ' ' || COALESCE(summary, '')))"))
+            connection.execute(text("""CREATE TABLE IF NOT EXISTS memory_events (
+                id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id), project_id TEXT NOT NULL,
+                event_type TEXT NOT NULL, client_id TEXT, previous_state TEXT, new_state TEXT,
+                details JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TEXT NOT NULL
+            )"""))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_memory_events_memory_created ON memory_events(memory_id, created_at DESC)"))
 
     def close(self) -> None:
         self.engine.dispose()
 
-    def add(self, values: dict[str, Any]) -> Memory:
+    def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
         from sqlalchemy import text
         with self.engine.begin() as connection:
             connection.execute(text("""
@@ -56,6 +62,8 @@ class PostgresDatabase:
                     :created_by, :updated_by, :client_id, :model_provider, :model_name, :session_id,
                     :source_type, :source_uri, :source_id, :confidence, CAST(:metadata AS jsonb), :created_at, :updated_at)
             """), {**values, "tags": json.dumps(values.get("tags", [])), "metadata": json.dumps(values.get("metadata", {}))})
+            if audit_event:
+                self._insert_event(connection, audit_event)
         memory = self.get(values["id"])
         if memory is None:
             raise RuntimeError("inserted memory could not be reloaded")
@@ -88,7 +96,7 @@ class PostgresDatabase:
             rows = connection.execute(text("SELECT * FROM memories WHERE project_id=:project_id AND status=:status ORDER BY updated_at DESC LIMIT :limit"), {"project_id": project_id, "status": status, "limit": limit}).mappings().all()
         return [self._from_row(row) for row in rows]
 
-    def update(self, memory_id: str, values: dict[str, Any]) -> Memory | None:
+    def update(self, memory_id: str, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory | None:
         current = self.get(memory_id)
         if current is None:
             return None
@@ -98,7 +106,23 @@ class PostgresDatabase:
             connection.execute(text("""UPDATE memories SET content=:content, summary=:summary,
                 tags=CAST(:tags AS jsonb), status=:status, metadata=CAST(:metadata AS jsonb),
                 updated_at=:updated_at, updated_by=:updated_by WHERE id=:id"""), params)
+            if audit_event:
+                self._insert_event(connection, audit_event)
         return self.get(memory_id)
+
+    def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        from sqlalchemy import text
+        with self.engine.connect() as connection:
+            rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY created_at ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _insert_event(connection: Any, event: dict[str, Any]) -> None:
+        from sqlalchemy import text
+        connection.execute(text("""INSERT INTO memory_events (id, memory_id, project_id, event_type,
+            client_id, previous_state, new_state, details, created_at) VALUES (:id, :memory_id,
+            :project_id, :event_type, :client_id, :previous_state, :new_state,
+            CAST(:details AS jsonb), :created_at)"""), {**event, "details": json.dumps(event.get("details", {}))})
 
     def health(self) -> dict[str, Any]:
         from sqlalchemy import text
