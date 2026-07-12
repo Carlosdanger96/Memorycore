@@ -1,0 +1,8 @@
+# Add to the Mistral Vibe MCP configuration. Replace the paths for this PC.
+[mcp_servers.memorycore]
+command = "C:\\PATH\\TO\\Memorycore\\.venv\\Scripts\\python.exe"
+args = ["-m", "memorycore.mcp_server"]
+env = { MEMORYCORE_DB = "C:\\PATH\\TO\\Memorycore\\data\\memorycore.db", MEMORYCORE_CLIENT_ID = "mistral-vibe", MEMORYCORE_CLIENT_ROLE = "writer", MEMORYCORE_MODEL_PROVIDER = "mistral", MEMORYCORE_MODEL_NAME = "vibe" }
+default_tools_approval_mode = "prompt"
+startup_timeout_sec = 20
+tool_timeout_sec = 60
