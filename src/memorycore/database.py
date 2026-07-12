@@ -46,6 +46,38 @@ ON memories(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_memories_project_type
 ON memories(project_id, memory_type);
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_events (
+    id TEXT PRIMARY KEY,
+    memory_id TEXT NOT NULL REFERENCES memories(id),
+    project_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    client_id TEXT,
+    previous_state TEXT,
+    new_state TEXT,
+    details TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_events_memory_created
+ON memory_events(memory_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_links (
+    id TEXT PRIMARY KEY,
+    from_memory_id TEXT NOT NULL REFERENCES memories(id),
+    to_memory_id TEXT NOT NULL REFERENCES memories(id),
+    relation_type TEXT NOT NULL CHECK (relation_type IN ('supersedes','corrects','contradicts')),
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(from_memory_id, to_memory_id, relation_type)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
     id UNINDEXED,
     content,
@@ -84,6 +116,9 @@ class SQLiteDatabase:
             self.connection.executescript(SCHEMA_SQL)
             self._upgrade_status_constraint()
             self._migrate_memories_table()
+            self.connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, name, checksum, applied_at) VALUES (1, 'initial_storage', 'embedded-v1', datetime('now'))"
+            )
             self.connection.commit()
 
     def _upgrade_status_constraint(self) -> None:
@@ -106,6 +141,8 @@ class SQLiteDatabase:
             DROP TRIGGER IF EXISTS memories_au;
             DROP INDEX IF EXISTS idx_memories_project_status;
             DROP INDEX IF EXISTS idx_memories_project_type;
+            DROP TABLE IF EXISTS memory_events;
+            DROP TABLE IF EXISTS memory_links;
             ALTER TABLE memories RENAME TO memories_legacy;
             CREATE TABLE memories (
                 id TEXT PRIMARY KEY,
@@ -145,6 +182,28 @@ class SQLiteDatabase:
             ON memories(project_id, status);
             CREATE INDEX IF NOT EXISTS idx_memories_project_type
             ON memories(project_id, memory_type);
+            CREATE TABLE memory_events (
+                id TEXT PRIMARY KEY,
+                memory_id TEXT NOT NULL REFERENCES memories(id),
+                project_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                client_id TEXT,
+                previous_state TEXT,
+                new_state TEXT,
+                details TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX idx_memory_events_memory_created
+            ON memory_events(memory_id, created_at DESC);
+            CREATE TABLE memory_links (
+                id TEXT PRIMARY KEY,
+                from_memory_id TEXT NOT NULL REFERENCES memories(id),
+                to_memory_id TEXT NOT NULL REFERENCES memories(id),
+                relation_type TEXT NOT NULL CHECK (relation_type IN ('supersedes','corrects','contradicts')),
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(from_memory_id, to_memory_id, relation_type)
+            );
             DELETE FROM memory_fts;
             INSERT INTO memory_fts(id, content, summary, tags)
             SELECT id, content, COALESCE(summary, ''), tags FROM memories;
@@ -190,7 +249,7 @@ class SQLiteDatabase:
         with self._lock:
             self.connection.close()
 
-    def add(self, values: dict[str, Any]) -> Memory:
+    def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
         with self._lock:
             self.connection.execute(
                 """
@@ -215,6 +274,8 @@ class SQLiteDatabase:
                     values["created_at"], values["updated_at"],
                 ),
             )
+            if audit_event:
+                self._insert_event(audit_event)
             self.connection.commit()
         memory = self.get(values["id"])
         if memory is None:
@@ -260,7 +321,8 @@ class SQLiteDatabase:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def update(self, memory_id: str, values: dict[str, Any]) -> Memory | None:
+    def update(self, memory_id: str, values: dict[str, Any],
+               audit_event: dict[str, Any] | None = None) -> Memory | None:
         current = self.get(memory_id)
         if current is None:
             return None
@@ -282,8 +344,29 @@ class SQLiteDatabase:
                 (content, summary, json.dumps(tags, ensure_ascii=False), status,
                  json.dumps(metadata, ensure_ascii=False), updated_at, updated_by, memory_id),
             )
+            if audit_event:
+                self._insert_event(audit_event)
             self.connection.commit()
         return self.get(memory_id)
+
+    def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY created_at ASC LIMIT ?",
+                (memory_id, limit),
+            ).fetchall()
+        return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
+
+    def _insert_event(self, event: dict[str, Any]) -> None:
+        self.connection.execute(
+            """INSERT INTO memory_events (
+                id, memory_id, project_id, event_type, client_id, previous_state,
+                new_state, details, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (event["id"], event["memory_id"], event["project_id"], event["event_type"],
+             event.get("client_id"), event.get("previous_state"), event.get("new_state"),
+             json.dumps(event.get("details", {}), ensure_ascii=False), event["created_at"]),
+        )
 
     def health(self) -> dict[str, Any]:
         with self._lock:
