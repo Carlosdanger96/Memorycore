@@ -58,6 +58,19 @@ memorycore --db .\data\memorycore.db init
 memorycore --db .\data\memorycore.db doctor
 ```
 
+### One-command Windows setup
+
+After cloning the repository, PowerShell can set up the local prototype:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\setup-windows.ps1
+```
+
+Use `-StartService` to initialize and immediately start the local Streamable
+HTTP MCP service. Use `.\scripts\verify-windows.ps1` later to re-run health
+checks and the test suite.
+
 The base installation has no runtime dependency beyond Python's standard library.
 
 ## Python usage
