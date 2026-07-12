@@ -141,6 +141,47 @@ class MemoryService:
     def reject_memory(self, memory_id: str, *, rejected_by: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.REJECTED.value, updated_by=rejected_by)
 
+    def supersede_memory(self, memory_id: str, *, content: str, updated_by: str,
+                         summary: str | None = None, tags: list[str] | None = None) -> Memory:
+        return self._replace_memory(memory_id, content=content, updated_by=updated_by,
+            summary=summary, tags=tags, relation_type="supersedes", original_status=MemoryStatus.SUPERSEDED.value)
+
+    def correct_memory(self, memory_id: str, *, content: str, updated_by: str,
+                       summary: str | None = None, tags: list[str] | None = None) -> Memory:
+        return self._replace_memory(memory_id, content=content, updated_by=updated_by,
+            summary=summary, tags=tags, relation_type="corrects", original_status=MemoryStatus.SUPERSEDED.value)
+
+    def _replace_memory(self, memory_id: str, *, content: str, updated_by: str,
+                        summary: str | None, tags: list[str] | None,
+                        relation_type: str, original_status: str) -> Memory:
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("atomic replacement is currently available for SQLite")
+        original = self.get_memory(memory_id)
+        if original is None:
+            raise ValueError("memory not found")
+        if original.status != MemoryStatus.ACTIVE.value:
+            raise ValueError("only active memories can be replaced")
+        if not content.strip():
+            raise ValueError("content is required")
+        now, replacement_id = _now(), str(uuid4())
+        replacement = {"id": replacement_id, "project_id": original.project_id,
+            "memory_type": original.memory_type, "content": content.strip(),
+            "summary": summary.strip() if summary else original.summary,
+            "tags": sorted({tag.strip() for tag in (tags if tags is not None else original.tags) if tag.strip()}),
+            "status": MemoryStatus.ACTIVE.value, "created_by": updated_by, "updated_by": updated_by,
+            "client_id": updated_by, "model_provider": original.model_provider, "model_name": original.model_name,
+            "session_id": original.session_id, "source_type": original.source_type,
+            "source_uri": original.source_uri, "source_id": original.source_id,
+            "confidence": original.confidence, "metadata": original.metadata,
+            "created_at": now, "updated_at": now}
+        return self.database.replace_memory(original, replacement, relation_type=relation_type,
+            original_status=original_status,
+            original_event=self._event(memory_id=original.id, project_id=original.project_id,
+                event_type="memory_superseded", client_id=updated_by, previous_state="active", new_state=original_status),
+            replacement_event=self._event(memory_id=replacement_id, project_id=original.project_id,
+                event_type="memory_created", client_id=updated_by, new_state="active",
+                details={"relation_type": relation_type, "replaces": original.id}))
+
     def health(self) -> dict[str, Any]:
         return self.database.health()
 
