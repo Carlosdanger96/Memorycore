@@ -85,9 +85,9 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\setup-windows.ps1
 ```
 
-Use `-StartService` to initialize and immediately start the local Streamable
-HTTP MCP service. Use `.\scripts\verify-windows.ps1` later to re-run health
-checks and the test suite.
+Use `-StartService -TokenFile <private-file> -PublicUrl <https-url>` only after
+following the protected web-service setup. Use `.\scripts\verify-windows.ps1`
+later to re-run health checks and the test suite.
 
 The base installation has no runtime dependency beyond Python's standard library.
 
@@ -151,16 +151,20 @@ Run a local stdio instance only for development or a host that cannot use HTTP:
 memorycore --db .\data\memorycore.db serve
 ```
 
-For the shared service, run exactly one central MCP process:
+For a local service used only by software on the same machine, run one central
+MCP process with an explicit testing override:
 
 ```powershell
+$env:MEMORYCORE_ALLOW_INSECURE_HTTP = "true" # isolated local testing only
 memorycore --db .\data\memorycore.db serve-http --host 127.0.0.1 --port 8000
 ```
 
-Clients then connect to `http://127.0.0.1:8000/mcp`. Do not expose this local
-prototype endpoint publicly. The production deployment target is one central
-service backed by PostgreSQL and protected with MCP-compatible OAuth; the
-SQLite backend remains the local single-host mode.
+Clients then connect to `http://127.0.0.1:8000/mcp`. For ChatGPT web or
+Mistral web, run the same service behind a public HTTPS tunnel and configure
+per-client bearer tokens. The endpoint refuses to start without a token
+registry unless the isolated-testing override above is set. See [Web MCP
+Deployment](docs/WEB_MCP_DEPLOYMENT.md). The SQLite backend remains appropriate
+for one-host prototypes; PostgreSQL is the production multi-host target.
 
 To switch the central service to PostgreSQL, copy `.env.example`, start the
 included local PostgreSQL container, install `.[postgres,mcp]`, then set
@@ -180,7 +184,7 @@ memories and can edit only their own pending records; approvers and
 administrators can approve, reject, or archive records. The server also exposes
 `memory_approve` and `memory_reject` for those controlled lifecycle changes.
 
-For shared or remote deployments, configure the server instead of trusting the
+For stdio-only deployments, configure the server instead of trusting the
 client:
 
 ```powershell
