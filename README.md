@@ -169,4 +169,5 @@ All future work must directly improve the ability of multiple LLMs to store, ret
 
 Planned supporting capabilities include validated MCP and API access, provenance, permissions, correction and supersession, retrieval quality, synchronization, and LLM-specific connectors. Storage engines, embeddings, graphs, consolidation, and other technical components should only be added when they materially improve the shared-memory goal.
 
-See [Design Decisions](docs/DESIGN_DECISIONS.md) and [Future Roadmap](docs/FUTURE_ROADMAP.md).
+See [Design Decisions](docs/DESIGN_DECISIONS.md) and the
+[v0.2.0 Prototype Plan](docs/PROTOTYPE_PLAN.md).
