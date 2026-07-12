@@ -76,8 +76,16 @@ class MemoryService:
         status = validate_status(status)
         fts_query = build_fts_query(query)
         if not fts_query:
-            return self.database.list_recent(project_id.strip(), limit, status)
-        return self.database.search(fts_query, project_id.strip(), limit, memory_type, status)
+            memories = self.database.list_recent(project_id.strip(), limit, status)
+        else:
+            memories = self.database.search(fts_query, project_id.strip(), limit, memory_type, status)
+        priority = {"correction": 0, "decision": 1, "preference": 2, "fact": 3, "procedure": 4, "note": 5}
+        return sorted(memories, key=lambda item: (priority.get(item.memory_type, 99), -(item.confidence or 0), item.updated_at))[:limit]
+
+    def find_exact_duplicate(self, *, project_id: str, memory_type: str, content: str) -> Memory | None:
+        if not isinstance(self.database, SQLiteDatabase):
+            return None
+        return self.database.find_exact_active(project_id.strip(), validate_memory_type(memory_type), content.strip())
 
     def retrieve_context(self, *, query: str, project_id: str, limit: int = 10,
                          memory_type: str | None = None,
