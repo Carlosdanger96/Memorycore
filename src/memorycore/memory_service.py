@@ -43,8 +43,9 @@ class MemoryService:
         if not content:
             raise ValueError("content is required")
         timestamp = _now()
-        return self.database.add({
-            "id": memory_id or str(uuid4()), "project_id": project_id,
+        memory_id = memory_id or str(uuid4())
+        values = {
+            "id": memory_id, "project_id": project_id,
             "memory_type": validate_memory_type(memory_type), "content": content,
             "summary": summary.strip() if summary else None,
             "tags": sorted({tag.strip() for tag in (tags or []) if tag.strip()}),
@@ -55,7 +56,11 @@ class MemoryService:
             "source_uri": source_uri, "source_id": source_id,
             "confidence": validate_confidence(confidence),
             "metadata": metadata or {}, "created_at": timestamp, "updated_at": timestamp,
-        })
+        }
+        return self.database.add(values, self._event(
+            memory_id=memory_id, project_id=project_id, event_type="memory_created",
+            client_id=client_id, new_state=values["status"], details={"memory_type": values["memory_type"]},
+        ))
 
     def get_memory(self, memory_id: str) -> Memory | None:
         return self.database.get(memory_id)
@@ -105,7 +110,18 @@ class MemoryService:
             values["status"] = validate_status_transition(current.status, status)
         if updated_by is not None:
             values["updated_by"] = updated_by
-        return self.database.update(memory_id, values)
+        event_type = "memory_updated"
+        if "status" in values:
+            event_type = {
+                MemoryStatus.ACTIVE.value: "memory_approved",
+                MemoryStatus.REJECTED.value: "memory_rejected",
+                MemoryStatus.ARCHIVED.value: "memory_archived",
+            }.get(values["status"], "memory_status_changed")
+        return self.database.update(memory_id, values, self._event(
+            memory_id=memory_id, project_id=current.project_id, event_type=event_type,
+            client_id=updated_by, previous_state=current.status,
+            new_state=values.get("status", current.status), details={"fields": sorted(values.keys())},
+        ))
 
     def archive_memory(self, memory_id: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.ARCHIVED.value)
@@ -118,3 +134,17 @@ class MemoryService:
 
     def health(self) -> dict[str, Any]:
         return self.database.health()
+
+    def get_memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        return self.database.list_events(memory_id, limit)
+
+    @staticmethod
+    def _event(*, memory_id: str, project_id: str, event_type: str,
+               client_id: str | None, previous_state: str | None = None,
+               new_state: str | None = None, details: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"id": str(uuid4()), "memory_id": memory_id, "project_id": project_id,
+                "event_type": event_type, "client_id": client_id,
+                "previous_state": previous_state, "new_state": new_state,
+                "details": details or {}, "created_at": _now()}
