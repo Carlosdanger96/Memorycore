@@ -12,7 +12,7 @@ from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
 )
-from .retrieval import build_fts_query, render_context
+from .retrieval import build_fts_query, rank_memories, render_context
 
 
 def _now() -> str:
@@ -79,8 +79,7 @@ class MemoryService:
             memories = self.database.list_recent(project_id.strip(), limit, status)
         else:
             memories = self.database.search(fts_query, project_id.strip(), limit, memory_type, status)
-        priority = {"correction": 0, "decision": 1, "preference": 2, "fact": 3, "procedure": 4, "note": 5}
-        return sorted(memories, key=lambda item: (priority.get(item.memory_type, 99), -(item.confidence or 0), item.updated_at))[:limit]
+        return [item.memory for item in rank_memories(query, memories, limit)]
 
     def find_exact_duplicate(self, *, project_id: str, memory_type: str, content: str) -> Memory | None:
         if not isinstance(self.database, SQLiteDatabase):
@@ -93,8 +92,10 @@ class MemoryService:
         memories = self.search_memory(query=query, project_id=project_id, limit=limit,
                                       memory_type=memory_type, status=status)
         items = [memory.to_dict() for memory in memories]
+        ranked = rank_memories(query, memories, limit)
         return {"project_id": project_id, "query": query, "status": status, "count": len(items),
-                "memories": items, "context_text": render_context(items)}
+                "memories": items, "retrieval": [{"memory_id": item.memory.id, "score": round(item.score, 4), "reasons": list(item.reasons)} for item in ranked],
+                "context_text": render_context(items)}
 
     def update_memory(self, memory_id: str, *, content: str | None = None,
                       summary: str | None = None, tags: list[str] | None = None,
