@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -139,6 +140,24 @@ class MemoryService:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
         return self.database.list_events(memory_id, limit)
+
+    def backup(self, destination: str | Path) -> None:
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("SQLite backup is only available for the SQLite storage adapter")
+        self.database.backup_to(destination)
+
+    def export_jsonl(self, destination: str | Path) -> int:
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("JSONL export is only available for the SQLite storage adapter")
+        path = Path(destination).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        memories = self.database.all_memories()
+        with path.open("w", encoding="utf-8") as handle:
+            for memory in memories:
+                handle.write(json.dumps({"record_type": "memory", **memory.to_dict()}, ensure_ascii=False) + "\n")
+                for event in self.get_memory_history(memory.id):
+                    handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
+        return len(memories)
 
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,
