@@ -90,3 +90,15 @@ def test_supersession_is_atomic_and_audited(tmp_path):
     assert replacement.status == "active"
     assert any(event["event_type"] == "memory_superseded" for event in service.get_memory_history(original.id))
     service.close()
+
+
+def test_retrieval_uses_candidate_pool_and_exact_summary(tmp_path):
+    service = MemoryService(tmp_path / "retrieval.db")
+    for index in range(30):
+        service.add_memory(project_id="alpha", memory_type="note", content=f"A shared token record {index}")
+    exact = service.add_memory(project_id="alpha", memory_type="note", content="Different body", summary="Shared token")
+    results = service.search_memory(query="shared token", project_id="alpha", limit=1)
+    assert results[0].id == exact.id
+    plan = service.database.connection.execute("EXPLAIN QUERY PLAN SELECT * FROM memories WHERE project_id='alpha' AND status='active' ORDER BY updated_at DESC").fetchall()
+    assert any("idx_memories_active_project_updated" in row[3] for row in plan)
+    service.close()
