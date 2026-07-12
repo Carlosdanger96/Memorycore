@@ -98,7 +98,9 @@ class SQLiteDatabase:
         ).fetchone()[0]
         if "'pending'" in sql:
             return
-        self.connection.executescript("""
+        try:
+            self.connection.executescript("""
+            BEGIN IMMEDIATE;
             DROP TRIGGER IF EXISTS memories_ai;
             DROP TRIGGER IF EXISTS memories_ad;
             DROP TRIGGER IF EXISTS memories_au;
@@ -158,7 +160,11 @@ class SQLiteDatabase:
                 INSERT INTO memory_fts(id, content, summary, tags)
                 VALUES (new.id, new.content, COALESCE(new.summary, ''), new.tags);
             END;
+            COMMIT;
         """)
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def _migrate_memories_table(self) -> None:
         """Add provenance columns to databases created by pre-0.2 Memorycore."""
@@ -222,7 +228,8 @@ class SQLiteDatabase:
             ).fetchone()
         return self._from_row(row) if row else None
 
-    def search(self, fts_query: str, project_id: str, limit: int, memory_type: str | None = None) -> list[Memory]:
+    def search(self, fts_query: str, project_id: str, limit: int,
+               memory_type: str | None = None, status: str = "active") -> list[Memory]:
         with self._lock:
             rows = self.connection.execute(
                 """
@@ -231,25 +238,25 @@ class SQLiteDatabase:
                 JOIN memories AS m ON m.id = memory_fts.id
                 WHERE memory_fts MATCH ?
                   AND m.project_id = ?
-                  AND m.status = 'active'
+                  AND m.status = ?
                   AND (? IS NULL OR m.memory_type = ?)
                 ORDER BY bm25(memory_fts), m.updated_at DESC
                 LIMIT ?
                 """,
-                (fts_query, project_id, memory_type, memory_type, limit),
+                (fts_query, project_id, status, memory_type, memory_type, limit),
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def list_recent(self, project_id: str, limit: int) -> list[Memory]:
+    def list_recent(self, project_id: str, limit: int, status: str = "active") -> list[Memory]:
         with self._lock:
             rows = self.connection.execute(
                 """
                 SELECT * FROM memories
-                WHERE project_id = ? AND status = 'active'
+                WHERE project_id = ? AND status = ?
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (project_id, limit),
+                (project_id, status, limit),
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
