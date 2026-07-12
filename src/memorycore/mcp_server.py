@@ -6,6 +6,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .http_auth import StaticTokenVerifier
 from .memory_service import MemoryService
 from .models import ClientRole, MemoryStatus, validate_client_role
 
@@ -80,9 +81,32 @@ class MemoryMCPPolicy:
 
 class MemoryMCPAdapter:
     def __init__(self, service: MemoryService,
-                 policy: MemoryMCPPolicy | None = None) -> None:
+                 policy: MemoryMCPPolicy | None = None,
+                 token_verifier: StaticTokenVerifier | None = None) -> None:
         self.service = service
-        self.policy = policy or MemoryMCPPolicy.from_environment()
+        self._default_policy = policy or MemoryMCPPolicy.from_environment()
+        self._token_verifier = token_verifier
+
+    @property
+    def policy(self) -> MemoryMCPPolicy:
+        """Return request-authenticated HTTP policy, or the stdio policy."""
+        if self._token_verifier is None:
+            return self._default_policy
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        access_token = get_access_token()
+        if access_token is None:
+            raise MemoryAccessError("HTTP request has no authenticated client identity")
+        identity = self._token_verifier.identity_for_client(access_token.client_id)
+        return MemoryMCPPolicy(
+            read_only=identity.read_only,
+            allowed_projects=set(identity.allowed_projects) if identity.allowed_projects is not None else None,
+            require_approval=identity.require_approval,
+            client_id=identity.client_id,
+            client_role=identity.client_role,
+            model_provider=identity.model_provider,
+            model_name=identity.model_name,
+        )
 
     async def memory_add(self, project_id: str, memory_type: str, content: str,
                          summary: str | None = None, tags: list[str] | None = None,
@@ -192,16 +216,24 @@ class MemoryMCPAdapter:
         return self.service.health()
 
 
-def create_server(service: MemoryService) -> FastMCP:
+def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier | None = None,
+                  public_url: str | None = None) -> FastMCP:
+    auth = None
+    if token_verifier is not None:
+        from mcp.server.auth.settings import AuthSettings
+        # A bearer-token connector does not need us to operate an OAuth issuer,
+        # but FastMCP requires a valid issuer URL when enabling its auth layer.
+        issuer_url = os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid")
+        auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url)
     server = FastMCP(
         "Memorycore",
         instructions=(
             "Shared durable memory for multiple LLM clients. Retrieve active project "
             "memory before writing. Memory identity and permissions are assigned by "
             "the Memorycore service, not supplied by the caller."
-        ),
+        ), token_verifier=token_verifier, auth=auth,
     )
-    adapter = MemoryMCPAdapter(service)
+    adapter = MemoryMCPAdapter(service, token_verifier=token_verifier)
     server.tool(name="memory_add")(adapter.memory_add)
     server.tool(name="memory_get")(adapter.memory_get)
     server.tool(name="memory_search")(adapter.memory_search)
@@ -237,7 +269,13 @@ def run_server(database_path: str | Path | None = None, *, transport: str | None
         selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
         if selected_transport not in {"stdio", "streamable-http", "sse"}:
             raise ValueError("transport must be stdio, streamable-http, or sse")
-        server = create_server(service)
+        token_verifier = StaticTokenVerifier.from_environment() if selected_transport != "stdio" else None
+        if selected_transport != "stdio" and token_verifier is None and os.getenv("MEMORYCORE_ALLOW_INSECURE_HTTP", "").lower() not in {"1", "true", "yes"}:
+            raise ValueError(
+                "HTTP MCP requires MEMORYCORE_HTTP_TOKENS_FILE. Set MEMORYCORE_ALLOW_INSECURE_HTTP=true only for isolated testing."
+            )
+        server = create_server(service, token_verifier=token_verifier,
+            public_url=os.getenv("MEMORYCORE_PUBLIC_URL") or None)
         if selected_transport == "stdio":
             server.run(transport="stdio")
         else:
