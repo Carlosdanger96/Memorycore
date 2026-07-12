@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -116,10 +117,22 @@ class SQLiteDatabase:
             self.connection.executescript(SCHEMA_SQL)
             self._upgrade_status_constraint()
             self._migrate_memories_table()
-            self.connection.execute(
-                "INSERT OR IGNORE INTO schema_migrations(version, name, checksum, applied_at) VALUES (1, 'initial_storage', 'embedded-v1', datetime('now'))"
-            )
+            self._apply_migrations()
             self.connection.commit()
+
+    def _apply_migrations(self) -> None:
+        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';")]
+        applied = {row[0]: row[1] for row in self.connection.execute("SELECT version, checksum FROM schema_migrations")}
+        for version, name, sql in migrations:
+            checksum = sql if version == 1 else hashlib.sha256(sql.encode()).hexdigest()
+            if version in applied:
+                if applied[version] != checksum:
+                    raise RuntimeError(f"migration checksum mismatch for version {version}")
+                continue
+            if version == 1:
+                self.connection.execute("INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, datetime('now'))", (version, name, checksum))
+                continue
+            self.connection.executescript("BEGIN IMMEDIATE; " + sql + " INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (" + str(version) + ", '" + name + "', '" + checksum + "', datetime('now')); COMMIT;")
 
     def _upgrade_status_constraint(self) -> None:
         """Rebuild the v0.1 table when its CHECK constraint lacks new statuses.
@@ -389,6 +402,27 @@ class SQLiteDatabase:
              event.get("client_id"), event.get("previous_state"), event.get("new_state"),
              json.dumps(event.get("details", {}), ensure_ascii=False), event["created_at"]),
         )
+
+    def replace_memory(self, original: Memory, replacement: dict[str, Any], *, relation_type: str,
+                       original_status: str, original_event: dict[str, Any],
+                       replacement_event: dict[str, Any]) -> Memory:
+        """Atomically create a replacement, link it, retire the original, and audit both."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                self.connection.execute("""INSERT INTO memories (id, project_id, memory_type, content, summary, tags, status, created_by, updated_by, client_id, model_provider, model_name, session_id, source_type, source_uri, source_id, confidence, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (replacement["id"], replacement["project_id"], replacement["memory_type"], replacement["content"], replacement.get("summary"), json.dumps(replacement.get("tags", [])), replacement["status"], replacement.get("created_by"), replacement.get("updated_by"), replacement.get("client_id"), replacement.get("model_provider"), replacement.get("model_name"), replacement.get("session_id"), replacement["source_type"], replacement.get("source_uri"), replacement.get("source_id"), replacement.get("confidence"), json.dumps(replacement.get("metadata", {})), replacement["created_at"], replacement["updated_at"]))
+                self.connection.execute("UPDATE memories SET status=?, updated_by=?, updated_at=? WHERE id=?", (original_status, replacement.get("created_by"), replacement["updated_at"], original.id))
+                self.connection.execute("INSERT INTO memory_links(id, from_memory_id, to_memory_id, relation_type, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (str(__import__('uuid').uuid4()), replacement["id"], original.id, relation_type, replacement.get("created_by"), replacement["created_at"]))
+                self._insert_event(original_event)
+                self._insert_event(replacement_event)
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        result = self.get(replacement["id"])
+        if result is None:
+            raise RuntimeError("replacement memory could not be reloaded")
+        return result
 
     def health(self) -> dict[str, Any]:
         with self._lock:
