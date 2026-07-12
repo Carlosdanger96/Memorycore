@@ -126,6 +126,13 @@ Each memory records its writer and provenance: `created_by`, `updated_by`,
 `memory_add`, `memory_get`, `memory_search`, `memory_retrieve_context`,
 `memory_update`, `memory_archive`, and `memory_health`.
 
+Each local MCP process receives its identity from its environment. This prevents
+an LLM tool call from impersonating another client. Supported roles are
+`reader`, `writer`, `approver`, and `administrator`. Writers create pending
+memories and can edit only their own pending records; approvers and
+administrators can approve, reject, or archive records. The server also exposes
+`memory_approve` and `memory_reject` for those controlled lifecycle changes.
+
 For shared or remote deployments, configure the server instead of trusting the
 client:
 
@@ -133,11 +140,17 @@ client:
 $env:MEMORYCORE_READ_ONLY = "true"                  # block every write
 $env:MEMORYCORE_ALLOWED_PROJECTS = "memorycore,hermes" # limit all reads/writes
 $env:MEMORYCORE_REQUIRE_APPROVAL = "true"           # new MCP writes start pending
+$env:MEMORYCORE_CLIENT_ID = "mistral-vibe"           # assigned by this server process
+$env:MEMORYCORE_CLIENT_ROLE = "writer"               # reader|writer|approver|administrator
+$env:MEMORYCORE_MODEL_PROVIDER = "mistral"
+$env:MEMORYCORE_MODEL_NAME = "codestral"
 ```
 
 An unset allowlist permits all projects. `MEMORYCORE_REQUIRE_APPROVAL` lets a
 trusted client promote a reviewed memory from `pending` to `active` with
-`memory_update`. Future supported integrations must preserve this contract and
+`memory_approve`. Normal search and context retrieval return only `active`
+memories; an explicit `status` argument is required to retrieve history.
+Future supported integrations must preserve this contract and
 the same shared database rather than creating provider-specific memory silos.
 
 ## v0.1.0 storage release gate
