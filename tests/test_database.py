@@ -51,3 +51,20 @@ def test_memory_audit_history_is_persistent(tmp_path):
     reopened = MemoryService(path)
     assert len(reopened.get_memory_history(memory.id)) == 2
     reopened.close()
+
+
+def test_sqlite_backup_and_jsonl_export(tmp_path):
+    source = tmp_path / "source.db"
+    service = MemoryService(source)
+    memory = service.add_memory(project_id="alpha", memory_type="fact", content="Export this memory")
+    service.update_memory(memory.id, summary="Exported", updated_by="tester")
+    backup = tmp_path / "backup.db"
+    exported = tmp_path / "memorycore.jsonl"
+    service.backup(backup)
+    assert service.export_jsonl(exported) == 1
+    service.close()
+    restored = MemoryService(backup)
+    assert restored.get_memory(memory.id) is not None
+    restored.close()
+    lines = exported.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 3 and '"record_type": "memory_event"' in lines[1]
