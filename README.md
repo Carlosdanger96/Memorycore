@@ -16,6 +16,11 @@ migrations, and recovery are core product requirements. If those guarantees do
 not hold, Memorycore has not achieved its purpose, regardless of which LLMs can
 connect to it.
 
+Multiple LLMs must be able to independently add, retrieve, update, approve,
+correct, supersede, and inspect the same memory records. They do this through
+the common Memorycore MCP service and its permission rules—not by directly
+opening or editing the database file.
+
 Memorycore is not primarily a note-taking application, database experiment, agent framework, or general knowledge-management platform. It is a shared memory layer for multiple LLMs.
 
 ## Current architecture
