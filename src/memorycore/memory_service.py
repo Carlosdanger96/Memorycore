@@ -75,10 +75,15 @@ class MemoryService:
             memory_type = validate_memory_type(memory_type)
         status = validate_status(status)
         fts_query = build_fts_query(query)
+        candidate_limit = min(100, max(25, limit * 5))
         if not fts_query:
-            memories = self.database.list_recent(project_id.strip(), limit, status)
+            memories = self.database.list_recent(project_id.strip(), candidate_limit, status)
         else:
-            memories = self.database.search(fts_query, project_id.strip(), limit, memory_type, status)
+            memories = self.database.search(fts_query, project_id.strip(), candidate_limit, memory_type, status)
+        if status == MemoryStatus.ACTIVE.value and query.strip() and isinstance(self.database, SQLiteDatabase):
+            exact = self.database.find_exact_active_any(project_id.strip(), query)
+            if exact is not None and all(item.id != exact.id for item in memories):
+                memories.insert(0, exact)
         return [item.memory for item in rank_memories(query, memories, limit)]
 
     def find_exact_duplicate(self, *, project_id: str, memory_type: str, content: str) -> Memory | None:
