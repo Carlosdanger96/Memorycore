@@ -5,6 +5,8 @@ __pycache__/
 .venv/
 venv/
 .env
+http-clients.json
+*.tokens.json
 *.db
 *.db-shm
 *.db-wal
