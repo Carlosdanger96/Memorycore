@@ -13,13 +13,13 @@ Memorycore is not primarily a note-taking application, database experiment, agen
 Version 0.1 establishes the durable storage foundation required for shared LLM memory:
 
 ```text
-Multiple LLMs and integrations
+Multiple LLM clients
             ↓
-     Shared memory interface
+   One Memorycore MCP service
             ↓
-        MemoryService
+ policy, lifecycle, audit, retrieval
             ↓
-       SQLite + FTS5
+SQLite (local prototype) → PostgreSQL (shared production)
 ```
 
 The current release focuses on one durable SQLite database and one `MemoryService`. It includes an optional stdio MCP adapter with the same record contract for every client, including a real stdio client integration test; the next release gate is deployment guidance and Windows validation.
@@ -114,11 +114,22 @@ MCP is the planned first common interface for connecting multiple LLMs to Memory
 pip install -e ".[mcp]"
 ```
 
-Run it through the packaged CLI:
+Run a local stdio instance only for development or a host that cannot use HTTP:
 
 ```powershell
 memorycore --db .\data\memorycore.db serve
 ```
+
+For the shared service, run exactly one central MCP process:
+
+```powershell
+memorycore --db .\data\memorycore.db serve-http --host 127.0.0.1 --port 8000
+```
+
+Clients then connect to `http://127.0.0.1:8000/mcp`. Do not expose this local
+prototype endpoint publicly. The production deployment target is one central
+service backed by PostgreSQL and protected with MCP-compatible OAuth; the
+SQLite backend remains the local single-host mode.
 
 Each memory records its writer and provenance: `created_by`, `updated_by`,
 `client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
