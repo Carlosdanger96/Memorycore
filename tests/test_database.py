@@ -80,3 +80,13 @@ def test_exact_duplicate_detection_is_project_scoped(tmp_path):
     assert service.find_exact_duplicate(project_id="alpha", memory_type="fact", content="  shared MEMORY is durable ") is not None
     assert service.find_exact_duplicate(project_id="beta", memory_type="fact", content=first.content) is None
     service.close()
+
+
+def test_supersession_is_atomic_and_audited(tmp_path):
+    service = MemoryService(tmp_path / "replace.db")
+    original = service.add_memory(project_id="alpha", memory_type="decision", content="Use SQLite")
+    replacement = service.supersede_memory(original.id, content="Use SQLite behind Memorycore", updated_by="hermes")
+    assert service.get_memory(original.id).status == "superseded"
+    assert replacement.status == "active"
+    assert any(event["event_type"] == "memory_superseded" for event in service.get_memory_history(original.id))
+    service.close()
