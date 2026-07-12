@@ -1,5 +1,13 @@
 # SQLite Memory Design
 
+## Core product invariant
+
+This design is required for Memorycore to function. A shared-memory product
+without durable records, source attribution, controlled corrections, audit
+history, recovery, and deterministic retrieval will eventually give connected
+LLMs incompatible or untrustworthy memory. The schema and operating rules below
+are therefore release-blocking core functionality.
+
 ## Decision
 
 SQLite remains the local Memorycore backend for the prototype. It is owned by
