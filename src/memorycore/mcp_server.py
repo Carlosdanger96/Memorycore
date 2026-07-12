@@ -168,7 +168,14 @@ class MemoryMCPAdapter:
 
 
 def create_server(service: MemoryService) -> FastMCP:
-    server = FastMCP("Memorycore")
+    server = FastMCP(
+        "Memorycore",
+        instructions=(
+            "Shared durable memory for multiple LLM clients. Retrieve active project "
+            "memory before writing. Memory identity and permissions are assigned by "
+            "the Memorycore service, not supplied by the caller."
+        ),
+    )
     adapter = MemoryMCPAdapter(service)
     server.tool(name="memory_add")(adapter.memory_add)
     server.tool(name="memory_get")(adapter.memory_get)
@@ -187,16 +194,31 @@ def default_database_path() -> Path:
     return Path(configured).expanduser() if configured else Path.home() / ".memorycore" / "memorycore.db"
 
 
-def run_server(database_path: str | Path | None = None) -> None:
+def run_server(database_path: str | Path | None = None, *, transport: str | None = None,
+               host: str | None = None, port: int | None = None) -> None:
+    """Run one Memorycore service instance.
+
+    ``streamable-http`` is the central-service transport. Stdio remains useful
+    for local development and hosts that cannot yet connect to HTTP MCP.
+    """
     service = MemoryService(database_path or default_database_path())
     try:
-        create_server(service).run()
+        selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
+        if selected_transport not in {"stdio", "streamable-http", "sse"}:
+            raise ValueError("transport must be stdio, streamable-http, or sse")
+        server = create_server(service)
+        if selected_transport == "stdio":
+            server.run(transport="stdio")
+        else:
+            server.settings.host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+            server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
+            server.run(transport=selected_transport)
     finally:
         service.close()
 
 
 def main() -> None:
-    run_server()
+    run_server(transport=os.getenv("MEMORYCORE_TRANSPORT", "stdio"))
 
 
 if __name__ == "__main__":
