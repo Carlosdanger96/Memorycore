@@ -31,6 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
     backup.add_argument("destination", type=Path)
     export = subcommands.add_parser("export", help="export memories and audit events as JSONL")
     export.add_argument("destination", type=Path)
+    importer = subcommands.add_parser("import", help="import memory records from JSONL")
+    importer.add_argument("source", type=Path)
     return parser
 
 
@@ -63,6 +65,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "export":
             count = service.export_jsonl(args.destination)
             print(json.dumps({"ok": True, "export": str(args.destination), "memory_count": count}, indent=2))
+            return 0
+        if args.command == "import":
+            count = service.import_jsonl(args.source)
+            print(json.dumps({"ok": True, "import": str(args.source), "memory_count": count}, indent=2))
             return 0
         result = service.health()
         result["command"] = args.command
