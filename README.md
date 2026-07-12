@@ -6,6 +6,16 @@ Its one purpose is to let different LLMs store, retrieve, and share the same per
 
 Everything in this repository—the database, `MemoryService`, search, MCP adapter, APIs, permissions, provenance, and future synchronization work—exists only to support that goal.
 
+## Core invariant
+
+Memorycore is only useful if its shared memory remains durable, attributable,
+project-scoped, retrievable, and historically correct. The memory storage model
+is therefore not an optional implementation detail: canonical records,
+provenance, lifecycle rules, links between corrections, immutable audit history,
+migrations, and recovery are core product requirements. If those guarantees do
+not hold, Memorycore has not achieved its purpose, regardless of which LLMs can
+connect to it.
+
 Memorycore is not primarily a note-taking application, database experiment, agent framework, or general knowledge-management platform. It is a shared memory layer for multiple LLMs.
 
 ## Current architecture
@@ -199,4 +209,5 @@ Planned supporting capabilities include validated MCP and API access, provenance
 
 See [Design Decisions](docs/DESIGN_DECISIONS.md) and the
 [v0.2.0 Prototype Plan](docs/PROTOTYPE_PLAN.md). The local database model and
-implementation checklist are in [SQLite Memory Design](docs/SQLITE_MEMORY_DESIGN.md).
+implementation checklist are in [SQLite Memory Design](docs/SQLITE_MEMORY_DESIGN.md),
+which defines a core product invariant rather than optional future work.
