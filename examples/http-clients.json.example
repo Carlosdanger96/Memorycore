@@ -1,0 +1,21 @@
+{
+  "clients": [
+    {
+      "token": "REPLACE_WITH_A_RANDOM_32_PLUS_CHARACTER_SECRET",
+      "client_id": "chatgpt-web",
+      "client_role": "writer",
+      "allowed_projects": ["personal"],
+      "model_provider": "openai",
+      "model_name": "chatgpt",
+      "require_approval": true
+    },
+    {
+      "token": "REPLACE_WITH_A_DIFFERENT_RANDOM_32_PLUS_CHARACTER_SECRET",
+      "client_id": "mistral-web",
+      "client_role": "approver",
+      "allowed_projects": ["personal"],
+      "model_provider": "mistral",
+      "model_name": "le-chat"
+    }
+  ]
+}
