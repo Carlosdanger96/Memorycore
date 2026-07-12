@@ -163,6 +163,12 @@ class MemoryMCPAdapter:
         memory = self.service.archive_memory(memory_id)
         return memory.to_dict() if memory else None
 
+    async def memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        memory = self.service.get_memory(memory_id)
+        if memory is not None:
+            self.policy.check_project(memory.project_id)
+        return self.service.get_memory_history(memory_id, limit)
+
     async def memory_health(self) -> dict[str, Any]:
         return self.service.health()
 
@@ -185,6 +191,7 @@ def create_server(service: MemoryService) -> FastMCP:
     server.tool(name="memory_approve")(adapter.memory_approve)
     server.tool(name="memory_reject")(adapter.memory_reject)
     server.tool(name="memory_archive")(adapter.memory_archive)
+    server.tool(name="memory_history")(adapter.memory_history)
     server.tool(name="memory_health")(adapter.memory_health)
     return server
 
