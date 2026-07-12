@@ -32,15 +32,19 @@ async def test_mcp_adapter_uses_persistent_service(tmp_path):
 @pytest.mark.asyncio
 async def test_mcp_enforces_project_scope_read_only_and_provenance(tmp_path):
     service = MemoryService(tmp_path / "mcp-policy.db")
-    policy = MemoryMCPPolicy(allowed_projects={"memorycore"})
+    policy = MemoryMCPPolicy(
+        allowed_projects={"memorycore"}, client_id="server-identity",
+        client_role="administrator", model_provider="local", model_name="test-model",
+    )
     adapter = MemoryMCPAdapter(service, policy)
     created = await adapter.memory_add(
         project_id="memorycore", memory_type="decision", content="Use one MCP contract",
-        created_by="chatgpt", client_id="work", model_provider="openai",
-        model_name="gpt-5", session_id="abc", source_type="conversation",
+        session_id="abc", source_type="conversation",
         source_uri="chat://memorycore", confidence=0.9,
     )
-    assert created["client_id"] == "work"
+    assert created["client_id"] == "server-identity"
+    assert created["created_by"] == "server-identity"
+    assert created["model_provider"] == "local"
     assert created["source_type"] == "conversation"
     assert created["confidence"] == 0.9
     with pytest.raises(MemoryAccessError):
@@ -54,12 +58,28 @@ async def test_mcp_enforces_project_scope_read_only_and_provenance(tmp_path):
 @pytest.mark.asyncio
 async def test_mcp_approval_mode_creates_pending_memory(tmp_path):
     service = MemoryService(tmp_path / "mcp-approval.db")
-    adapter = MemoryMCPAdapter(service, MemoryMCPPolicy(require_approval=True))
-    created = await adapter.memory_add(project_id="alpha", memory_type="note", content="Review me")
+    writer = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="writer", client_role="writer"))
+    created = await writer.memory_add(project_id="alpha", memory_type="note", content="Review me")
     assert created["status"] == "pending"
-    activated = await adapter.memory_update(created["id"], status="active", updated_by="reviewer")
+    with pytest.raises(MemoryAccessError):
+        await writer.memory_approve(created["id"])
+    approver = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="reviewer", client_role="approver"))
+    activated = await approver.memory_approve(created["id"])
     assert activated is not None and activated["status"] == "active"
     assert activated["updated_by"] == "reviewer"
+    service.close()
+
+
+@pytest.mark.asyncio
+async def test_writer_cannot_edit_active_memory_or_spoof_identity(tmp_path):
+    service = MemoryService(tmp_path / "mcp-roles.db")
+    writer = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="mistral", client_role="writer"))
+    created = await writer.memory_add(project_id="alpha", memory_type="note", content="A proposed fact")
+    assert created["client_id"] == "mistral"
+    approver = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="hermes", client_role="approver"))
+    await approver.memory_approve(created["id"])
+    with pytest.raises(MemoryAccessError):
+        await writer.memory_update(created["id"], content="Changed after approval")
     service.close()
 
 
@@ -68,6 +88,8 @@ async def test_real_mcp_client_can_use_stdio_server(tmp_path):
     """Validate the actual MCP protocol, not only the adapter methods."""
     environment = os.environ.copy()
     environment["MEMORYCORE_DB"] = str(tmp_path / "stdio.db")
+    environment["MEMORYCORE_CLIENT_ID"] = "stdio-test"
+    environment["MEMORYCORE_CLIENT_ROLE"] = "administrator"
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-m", "memorycore.mcp_server"],
@@ -77,12 +99,11 @@ async def test_real_mcp_client_can_use_stdio_server(tmp_path):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tool_names = {tool.name for tool in (await session.list_tools()).tools}
-            assert {"memory_add", "memory_retrieve_context", "memory_health"} <= tool_names
+            assert {"memory_add", "memory_approve", "memory_retrieve_context", "memory_health"} <= tool_names
             result = await session.call_tool("memory_add", {
                 "project_id": "alpha",
                 "memory_type": "decision",
                 "content": "The server accepts real MCP client requests",
-                "client_id": "integration-test",
                 "source_type": "system_event",
             })
             assert not result.isError
