@@ -14,6 +14,7 @@ dependencies = []
 test = ["pytest>=8"]
 mcp = ["mcp>=1,<2"]
 mcp-test = ["memorycore[test,mcp]", "pytest-asyncio>=0.23"]
+postgres = ["SQLAlchemy>=2.0", "psycopg[binary]>=3.1"]
 
 [project.scripts]
 memorycore = "memorycore.cli:main"
