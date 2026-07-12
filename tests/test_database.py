@@ -72,3 +72,11 @@ def test_sqlite_backup_and_jsonl_export(tmp_path):
     assert imported.import_jsonl(exported) == 1
     assert imported.get_memory(memory.id) is not None
     imported.close()
+
+
+def test_exact_duplicate_detection_is_project_scoped(tmp_path):
+    service = MemoryService(tmp_path / "duplicates.db")
+    first = service.add_memory(project_id="alpha", memory_type="fact", content="Shared memory is durable")
+    assert service.find_exact_duplicate(project_id="alpha", memory_type="fact", content="  shared MEMORY is durable ") is not None
+    assert service.find_exact_duplicate(project_id="beta", memory_type="fact", content=first.content) is None
+    service.close()
