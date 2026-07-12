@@ -36,3 +36,18 @@ def test_lifecycle_is_deterministic_and_status_search_is_explicit(tmp_path):
     approved = service.approve_memory(pending.id, approved_by="reviewer")
     assert approved is not None and approved.status == "active"
     service.close()
+
+
+def test_memory_audit_history_is_persistent(tmp_path):
+    path = tmp_path / "audit.db"
+    service = MemoryService(path)
+    memory = service.add_memory(project_id="alpha", memory_type="decision",
+        content="Use audited shared memory", client_id="mistral")
+    service.update_memory(memory.id, summary="Audited", updated_by="hermes")
+    history = service.get_memory_history(memory.id)
+    assert [event["event_type"] for event in history] == ["memory_created", "memory_updated"]
+    assert history[0]["client_id"] == "mistral"
+    service.close()
+    reopened = MemoryService(path)
+    assert len(reopened.get_memory_history(memory.id)) == 2
+    reopened.close()
