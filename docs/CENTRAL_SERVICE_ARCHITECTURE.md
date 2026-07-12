@@ -25,3 +25,19 @@ concurrent writes. No client should receive direct production database access.
 
 The MCP interface, memory schema, lifecycle, and audit contract must remain
 stable across those storage adapters.
+
+## PostgreSQL local setup
+
+For the central-service development stack:
+
+```powershell
+docker compose up -d postgres
+pip install -e ".[postgres,mcp]"
+$env:MEMORYCORE_DATABASE_URL = "postgresql+psycopg://memorycore:change-me-before-sharing@127.0.0.1:5432/memorycore"
+memorycore serve-http --host 127.0.0.1 --port 8000
+```
+
+The first service start creates the Memorycore tables and indexes. Keep the
+endpoint bound to localhost during the prototype. Do not expose PostgreSQL or
+the MCP endpoint to the internet until OAuth-based client authentication is
+implemented.
