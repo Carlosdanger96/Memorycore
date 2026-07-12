@@ -8,11 +8,13 @@ Requirements: Python 3.11+ and Git. SQLite is included with Python.
 git clone https://github.com/Carlosdanger96/Memorycore.git
 cd Memorycore
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\setup-windows.ps1 -StartService
+.\scripts\setup-windows.ps1
 ```
 
-This creates `.venv`, installs MCP support, initializes `data\memorycore.db`,
-and starts a localhost-only endpoint at `http://127.0.0.1:8000/mcp`.
+This creates `.venv`, installs MCP support, and initializes `data\memorycore.db`.
+For web connector deployment, use `-StartService -TokenFile <private-file>
+-PublicUrl <https-url>` after creating the registry described in [Web MCP
+Deployment](WEB_MCP_DEPLOYMENT.md). Normal HTTP mode requires bearer tokens.
 
 ## Commands
 
@@ -42,5 +44,5 @@ PostgreSQL still needs live integration validation before production use.
 ## Safety boundary
 
 Keep database files and database credentials private. LLM clients use MCP and
-do not receive direct database access. Keep HTTP bound to localhost until
-token-derived remote identity and authorization are implemented.
+do not receive direct database access. HTTP identity is token-derived; see
+[Web MCP Deployment](WEB_MCP_DEPLOYMENT.md) before exposing an endpoint.
