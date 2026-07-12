@@ -314,7 +314,7 @@ class SQLiteDatabase:
                   AND m.project_id = ?
                   AND m.status = ?
                   AND (? IS NULL OR m.memory_type = ?)
-                ORDER BY bm25(memory_fts), m.updated_at DESC
+                ORDER BY bm25(memory_fts, 1.0, 3.0, 2.0), m.updated_at DESC
                 LIMIT ?
                 """,
                 (fts_query, project_id, status, memory_type, memory_type, limit),
@@ -380,6 +380,13 @@ class SQLiteDatabase:
             row = self.connection.execute("""SELECT * FROM memories
                 WHERE project_id=? AND memory_type=? AND status='active'
                 AND lower(trim(content))=lower(trim(?)) LIMIT 1""", (project_id, memory_type, content)).fetchone()
+        return self._from_row(row) if row else None
+
+    def find_exact_active_any(self, project_id: str, query: str) -> Memory | None:
+        with self._lock:
+            row = self.connection.execute("""SELECT * FROM memories WHERE project_id=? AND status='active'
+                AND (lower(trim(content))=lower(trim(?)) OR lower(trim(COALESCE(summary,'')))=lower(trim(?)))
+                ORDER BY updated_at DESC LIMIT 1""", (project_id, query, query)).fetchone()
         return self._from_row(row) if row else None
 
     def backup_to(self, destination: str | Path) -> None:
