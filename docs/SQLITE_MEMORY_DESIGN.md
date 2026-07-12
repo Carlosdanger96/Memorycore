@@ -54,6 +54,11 @@ or normalized table.
 6. Use confidence and recency only as tie-breakers.
 7. Return a small bounded context set.
 
+Memorycore returns an inspectable `retrieval` list beside context output. Each
+entry records the memory ID, deterministic score, and reasons such as an exact
+content match, matching terms or tags, memory type, and confidence. No hidden
+embedding or LLM ranking is used in the prototype.
+
 FTS5 remains an ordinary synchronized index for the prototype. Do not switch to
 external-content or embedding search until this deterministic path is measured
 and proven insufficient.
