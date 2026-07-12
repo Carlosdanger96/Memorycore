@@ -6,6 +6,14 @@ Two different LLM clients use one shared, durable memory database. A memory
 written by one client is retrievable, reviewable, correctable, and preserved
 for the other client after a restart.
 
+## Non-negotiable foundation
+
+The SQLite memory structure is a core part of Memorycore. The project cannot
+defer its canonical schema, provenance, lifecycle, audit history, migrations,
+recovery, or deterministic retrieval and still claim to provide shared memory.
+The ten SQLite implementation steps are release-blocking requirements for the
+prototype, not a later optimization track.
+
 ## Target deployment
 
 Each local client starts its own stdio MCP process with a server-assigned
