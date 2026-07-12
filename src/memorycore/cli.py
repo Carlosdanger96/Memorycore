@@ -27,6 +27,10 @@ def build_parser() -> argparse.ArgumentParser:
     service = subcommands.add_parser("serve-http", help="run the central Streamable HTTP MCP service")
     service.add_argument("--host", default=os.getenv("MEMORYCORE_HOST", "127.0.0.1"))
     service.add_argument("--port", type=int, default=int(os.getenv("MEMORYCORE_PORT", "8000")))
+    backup = subcommands.add_parser("backup", help="create a consistent SQLite backup")
+    backup.add_argument("destination", type=Path)
+    export = subcommands.add_parser("export", help="export memories and audit events as JSONL")
+    export.add_argument("destination", type=Path)
     return parser
 
 
@@ -52,6 +56,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     service = MemoryService(args.db)
     try:
+        if args.command == "backup":
+            service.backup(args.destination)
+            print(json.dumps({"ok": True, "backup": str(args.destination)}, indent=2))
+            return 0
+        if args.command == "export":
+            count = service.export_jsonl(args.destination)
+            print(json.dumps({"ok": True, "export": str(args.destination), "memory_count": count}, indent=2))
+            return 0
         result = service.health()
         result["command"] = args.command
         print(json.dumps(result, indent=2, sort_keys=True))
