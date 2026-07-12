@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from .database import SQLiteDatabase
+from .postgres_database import PostgresDatabase
 from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
@@ -19,7 +20,8 @@ def _now() -> str:
 
 class MemoryService:
     def __init__(self, database_path: str | Path) -> None:
-        self.database = SQLiteDatabase(database_path)
+        database_target = str(database_path)
+        self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgres://")) else SQLiteDatabase(database_path)
         self.database.initialize()
 
     def close(self) -> None:
