@@ -159,6 +159,26 @@ class MemoryService:
                     handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
         return len(memories)
 
+    def import_jsonl(self, source: str | Path) -> int:
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("JSONL import is only available for the SQLite storage adapter")
+        imported = 0
+        with Path(source).expanduser().open(encoding="utf-8") as handle:
+            for line in handle:
+                record = json.loads(line)
+                if record.get("record_type") != "memory" or self.get_memory(record["id"]):
+                    continue
+                self.add_memory(project_id=record["project_id"], memory_type=record["memory_type"],
+                    content=record["content"], summary=record.get("summary"), tags=record.get("tags"),
+                    created_by=record.get("created_by"), client_id=record.get("client_id"),
+                    model_provider=record.get("model_provider"), model_name=record.get("model_name"),
+                    session_id=record.get("session_id"), source_type=record.get("source_type", "manual_import"),
+                    source_uri=record.get("source_uri"), source_id=record.get("source_id"),
+                    confidence=record.get("confidence"), metadata=record.get("metadata"),
+                    status=record.get("status", "active"), memory_id=record["id"])
+                imported += 1
+        return imported
+
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,
                client_id: str | None, previous_state: str | None = None,
