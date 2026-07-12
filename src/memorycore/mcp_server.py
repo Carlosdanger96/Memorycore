@@ -158,6 +158,22 @@ class MemoryMCPAdapter:
         memory = self.service.reject_memory(memory_id, rejected_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
+    async def memory_supersede(self, memory_id: str, content: str, summary: str | None = None,
+                               tags: list[str] | None = None) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
+        return self.service.supersede_memory(memory_id, content=content, summary=summary, tags=tags, updated_by=self.policy.client_id).to_dict()
+
+    async def memory_correct(self, memory_id: str, content: str, summary: str | None = None,
+                             tags: list[str] | None = None) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
+        return self.service.correct_memory(memory_id, content=content, summary=summary, tags=tags, updated_by=self.policy.client_id).to_dict()
+
     async def memory_archive(self, memory_id: str) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
@@ -193,6 +209,8 @@ def create_server(service: MemoryService) -> FastMCP:
     server.tool(name="memory_update")(adapter.memory_update)
     server.tool(name="memory_approve")(adapter.memory_approve)
     server.tool(name="memory_reject")(adapter.memory_reject)
+    server.tool(name="memory_supersede")(adapter.memory_supersede)
+    server.tool(name="memory_correct")(adapter.memory_correct)
     server.tool(name="memory_archive")(adapter.memory_archive)
     server.tool(name="memory_history")(adapter.memory_history)
     server.tool(name="memory_health")(adapter.memory_health)
