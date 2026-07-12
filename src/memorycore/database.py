@@ -357,6 +357,21 @@ class SQLiteDatabase:
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
 
+    def all_memories(self) -> list[Memory]:
+        with self._lock:
+            rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def backup_to(self, destination: str | Path) -> None:
+        destination_path = Path(destination).expanduser().resolve()
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            target = sqlite3.connect(destination_path)
+            try:
+                self.connection.backup(target)
+            finally:
+                target.close()
+
     def _insert_event(self, event: dict[str, Any]) -> None:
         self.connection.execute(
             """INSERT INTO memory_events (
