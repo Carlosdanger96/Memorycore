@@ -4,21 +4,109 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
   storage:
-    runs-on: ubuntu-latest
+    name: Storage Tests
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[test]"
-      - run: python -m compileall src tests
-      - run: pytest --ignore=tests/test_mcp.py
-      - run: memorycore --db ./ci-memorycore.db init
-      - run: memorycore --db ./ci-memorycore.db doctor
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+      
+      - name: Compile Python files
+        run: python -m compileall src tests
+      
+      - name: Run tests
+        run: pytest --ignore=tests/test_mcp.py --cov=src/memorycore --cov-report=xml
+      
+      - name: Run CLI tests
+        run: |
+          memorycore --db ./ci-memorycore.db init
+          memorycore --db ./ci-memorycore.db doctor
+          memorycore --db ./ci-memorycore.db stats
+      
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  lint:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+      
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      
+      - name: Run Black
+        run: black --check src tests
+      
+      - name: Run isort
+        run: isort --check src tests
+      
+      - name: Run flake8
+        run: flake8 src tests
+      
+      - name: Run mypy
+        run: mypy src tests
+
+  build:
+    name: Package Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: "pyproject.toml"
+      
+      - name: Install build dependencies
+        run: pip install build twine
+      
+      - name: Build package
+        run: python -m build
+      
+      - name: Check package
+        run: twine check dist/*
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: memorycore-package
+          path: dist/

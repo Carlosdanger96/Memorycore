@@ -8,16 +8,64 @@ version = "0.1.0.dev0"
 description = "Local-first SQLite memory service for LLMs and agents"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Carlosdanger96", email = "carlosdanger96@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Utilities",
+    "Typing :: Typed",
+]
+keywords = [
+    "memory",
+    "sqlite",
+    "llm",
+    "ai",
+    "agents",
+    "full-text-search",
+    "fts5",
+    "persistence",
+]
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = [
+    "pytest>=8",
+    "pytest-cov>=4",
+]
 mcp = ["mcp>=1,<2"]
 mcp-test = ["memorycore[test,mcp]", "pytest-asyncio>=0.23"]
+dev = [
+    "memorycore[test,mcp]",
+    "black>=24",
+    "isort>=5.13",
+    "flake8>=6",
+    "mypy>=1.8",
+    "pre-commit>=3",
+    "build>=1",
+    "twine>=5",
+]
 
 [project.scripts]
 memorycore = "memorycore.cli:main"
 memorycore-mcp = "memorycore.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/Carlosdanger96/Memorycore"
+Documentation = "https://github.com/Carlosdanger96/Memorycore#readme"
+Repository = "https://github.com/Carlosdanger96/Memorycore.git"
+Issues = "https://github.com/Carlosdanger96/Memorycore/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -25,4 +73,61 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-asyncio_mode = "auto"
+addopts = "-v --tb=short"
+filterwarnings = [
+    "error",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312", "py313"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["memorycore"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[tool.flake8]
+max-line-length = 100
+extend-select = ["B", "C4", "E", "F", "W"]
+ignore = ["E203", "W503"]
+
+[tool.coverage.run]
+source = ["src/memorycore"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.bandit]
+skips = ["B101"]  # Skip assert_used assertion
