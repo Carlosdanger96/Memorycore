@@ -362,6 +362,13 @@ class SQLiteDatabase:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
+    def find_exact_active(self, project_id: str, memory_type: str, content: str) -> Memory | None:
+        with self._lock:
+            row = self.connection.execute("""SELECT * FROM memories
+                WHERE project_id=? AND memory_type=? AND status='active'
+                AND lower(trim(content))=lower(trim(?)) LIMIT 1""", (project_id, memory_type, content)).fetchone()
+        return self._from_row(row) if row else None
+
     def backup_to(self, destination: str | Path) -> None:
         destination_path = Path(destination).expanduser().resolve()
         destination_path.parent.mkdir(parents=True, exist_ok=True)
