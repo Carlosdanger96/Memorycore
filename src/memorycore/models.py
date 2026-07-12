@@ -35,6 +35,27 @@ class SourceType(StrEnum):
     SYSTEM_EVENT = "system_event"
 
 
+class ClientRole(StrEnum):
+    READER = "reader"
+    WRITER = "writer"
+    APPROVER = "approver"
+    ADMINISTRATOR = "administrator"
+
+
+_ALLOWED_STATUS_TRANSITIONS: dict[str, set[str]] = {
+    MemoryStatus.PENDING.value: {
+        MemoryStatus.ACTIVE.value, MemoryStatus.REJECTED.value, MemoryStatus.ARCHIVED.value,
+    },
+    MemoryStatus.ACTIVE.value: {
+        MemoryStatus.SUPERSEDED.value, MemoryStatus.CONTRADICTED.value, MemoryStatus.ARCHIVED.value,
+    },
+    MemoryStatus.REJECTED.value: {MemoryStatus.ARCHIVED.value},
+    MemoryStatus.SUPERSEDED.value: {MemoryStatus.ARCHIVED.value},
+    MemoryStatus.CONTRADICTED.value: {MemoryStatus.ARCHIVED.value},
+    MemoryStatus.ARCHIVED.value: set(),
+}
+
+
 @dataclass(slots=True)
 class Memory:
     id: str
@@ -76,6 +97,21 @@ def validate_status(value: str) -> str:
     except ValueError as exc:
         allowed = ", ".join(item.value for item in MemoryStatus)
         raise ValueError(f"status must be one of: {allowed}") from exc
+
+
+def validate_status_transition(current: str, target: str) -> str:
+    target = validate_status(target)
+    if target not in _ALLOWED_STATUS_TRANSITIONS.get(current, set()):
+        raise ValueError(f"invalid memory status transition: {current} -> {target}")
+    return target
+
+
+def validate_client_role(value: str) -> str:
+    try:
+        return ClientRole(value).value
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in ClientRole)
+        raise ValueError(f"client_role must be one of: {allowed}") from exc
 
 
 def validate_source_type(value: str) -> str:
