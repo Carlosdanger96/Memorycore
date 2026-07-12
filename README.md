@@ -131,6 +131,10 @@ prototype endpoint publicly. The production deployment target is one central
 service backed by PostgreSQL and protected with MCP-compatible OAuth; the
 SQLite backend remains the local single-host mode.
 
+To switch the central service to PostgreSQL, copy `.env.example`, start the
+included local PostgreSQL container, install `.[postgres,mcp]`, then set
+`MEMORYCORE_DATABASE_URL`. See [Central Service Architecture](docs/CENTRAL_SERVICE_ARCHITECTURE.md).
+
 Each memory records its writer and provenance: `created_by`, `updated_by`,
 `client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
 `source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
