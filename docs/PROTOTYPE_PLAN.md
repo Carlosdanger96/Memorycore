@@ -14,6 +14,12 @@ recovery, or deterministic retrieval and still claim to provide shared memory.
 The ten SQLite implementation steps are release-blocking requirements for the
 prototype, not a later optimization track.
 
+The other release-blocking requirement is multi-model manipulation: two or more
+LLM clients must independently add and update the same records through the
+Memorycore service. Clients never receive direct database-file access; the
+service enforces project scope, identity, roles, lifecycle transitions, and
+audit history for every mutation.
+
 ## Target deployment
 
 Each local client starts its own stdio MCP process with a server-assigned
