@@ -68,3 +68,7 @@ def test_sqlite_backup_and_jsonl_export(tmp_path):
     restored.close()
     lines = exported.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3 and '"record_type": "memory_event"' in lines[1]
+    imported = MemoryService(tmp_path / "imported.db")
+    assert imported.import_jsonl(exported) == 1
+    assert imported.get_memory(memory.id) is not None
+    imported.close()
