@@ -8,7 +8,7 @@ from uuid import uuid4
 from .database import SQLiteDatabase
 from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
-    validate_source_type, validate_status,
+    validate_source_type, validate_status, validate_status_transition,
 )
 from .retrieval import build_fts_query, render_context
 
@@ -59,22 +59,25 @@ class MemoryService:
         return self.database.get(memory_id)
 
     def search_memory(self, *, query: str, project_id: str, limit: int = 10,
-                      memory_type: str | None = None) -> list[Memory]:
+                      memory_type: str | None = None,
+                      status: str = MemoryStatus.ACTIVE.value) -> list[Memory]:
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
         if memory_type is not None:
             memory_type = validate_memory_type(memory_type)
+        status = validate_status(status)
         fts_query = build_fts_query(query)
         if not fts_query:
-            return self.database.list_recent(project_id.strip(), limit)
-        return self.database.search(fts_query, project_id.strip(), limit, memory_type)
+            return self.database.list_recent(project_id.strip(), limit, status)
+        return self.database.search(fts_query, project_id.strip(), limit, memory_type, status)
 
     def retrieve_context(self, *, query: str, project_id: str, limit: int = 10,
-                         memory_type: str | None = None) -> dict[str, Any]:
+                         memory_type: str | None = None,
+                         status: str = MemoryStatus.ACTIVE.value) -> dict[str, Any]:
         memories = self.search_memory(query=query, project_id=project_id, limit=limit,
-                                      memory_type=memory_type)
+                                      memory_type=memory_type, status=status)
         items = [memory.to_dict() for memory in memories]
-        return {"project_id": project_id, "query": query, "count": len(items),
+        return {"project_id": project_id, "query": query, "status": status, "count": len(items),
                 "memories": items, "context_text": render_context(items)}
 
     def update_memory(self, memory_id: str, *, content: str | None = None,
@@ -82,6 +85,9 @@ class MemoryService:
                       metadata: dict[str, Any] | None = None,
                       status: str | None = None,
                       updated_by: str | None = None) -> Memory | None:
+        current = self.get_memory(memory_id)
+        if current is None:
+            return None
         values: dict[str, Any] = {"updated_at": _now()}
         if content is not None:
             if not content.strip():
@@ -94,13 +100,19 @@ class MemoryService:
         if metadata is not None:
             values["metadata"] = metadata
         if status is not None:
-            values["status"] = validate_status(status)
+            values["status"] = validate_status_transition(current.status, status)
         if updated_by is not None:
             values["updated_by"] = updated_by
         return self.database.update(memory_id, values)
 
     def archive_memory(self, memory_id: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.ARCHIVED.value)
+
+    def approve_memory(self, memory_id: str, *, approved_by: str) -> Memory | None:
+        return self.update_memory(memory_id, status=MemoryStatus.ACTIVE.value, updated_by=approved_by)
+
+    def reject_memory(self, memory_id: str, *, rejected_by: str) -> Memory | None:
+        return self.update_memory(memory_id, status=MemoryStatus.REJECTED.value, updated_by=rejected_by)
 
     def health(self) -> dict[str, Any]:
         return self.database.health()
