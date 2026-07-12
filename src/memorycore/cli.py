@@ -24,13 +24,16 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("init", help="create or initialize the SQLite database")
     subcommands.add_parser("doctor", help="verify SQLite and FTS5 health")
     subcommands.add_parser("serve", help="run the optional stdio MCP server")
+    service = subcommands.add_parser("serve-http", help="run the central Streamable HTTP MCP service")
+    service.add_argument("--host", default=os.getenv("MEMORYCORE_HOST", "127.0.0.1"))
+    service.add_argument("--port", type=int, default=int(os.getenv("MEMORYCORE_PORT", "8000")))
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
-    if args.command == "serve":
+    if args.command in {"serve", "serve-http"}:
         try:
             from .mcp_server import run_server
         except ModuleNotFoundError as exc:
@@ -41,7 +44,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 return 2
             raise
-        run_server(args.db)
+        if args.command == "serve-http":
+            run_server(args.db, transport="streamable-http", host=args.host, port=args.port)
+        else:
+            run_server(args.db, transport="stdio")
         return 0
 
     service = MemoryService(args.db)

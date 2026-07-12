@@ -1,5 +1,6 @@
 from memorycore.database import SQLiteDatabase
 from memorycore.memory_service import MemoryService
+import pytest
 
 
 def test_database_crud_and_fts(tmp_path):
@@ -23,3 +24,15 @@ def test_database_health(tmp_path):
     health = database.health()
     assert health["ok"] is True and health["fts5"] is True
     database.close()
+
+
+def test_lifecycle_is_deterministic_and_status_search_is_explicit(tmp_path):
+    service = MemoryService(tmp_path / "lifecycle.db")
+    pending = service.add_memory(project_id="alpha", memory_type="fact", content="Awaiting review", status="pending")
+    assert service.search_memory(query="Awaiting", project_id="alpha") == []
+    assert service.search_memory(query="Awaiting", project_id="alpha", status="pending")[0].id == pending.id
+    with pytest.raises(ValueError, match="invalid memory status transition"):
+        service.update_memory(pending.id, status="superseded")
+    approved = service.approve_memory(pending.id, approved_by="reviewer")
+    assert approved is not None and approved.status == "active"
+    service.close()

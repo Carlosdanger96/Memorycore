@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "memorycore"
 version = "0.1.0.dev0"
-description = "Local-first SQLite memory service for LLMs and agents"
+description = "Shared durable memory service for multiple LLMs and agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -14,10 +14,12 @@ dependencies = []
 test = ["pytest>=8"]
 mcp = ["mcp>=1,<2"]
 mcp-test = ["memorycore[test,mcp]", "pytest-asyncio>=0.23"]
+postgres = ["SQLAlchemy>=2.0", "psycopg[binary]>=3.1"]
 
 [project.scripts]
 memorycore = "memorycore.cli:main"
 memorycore-mcp = "memorycore.mcp_server:main"
+memorycore-service = "memorycore.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

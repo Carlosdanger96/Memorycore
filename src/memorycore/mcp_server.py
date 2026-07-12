@@ -7,43 +7,159 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .memory_service import MemoryService
+from .models import ClientRole, MemoryStatus, validate_client_role
+
+
+class MemoryAccessError(PermissionError):
+    """Raised when an MCP client exceeds this server's configured scope."""
+
+
+class MemoryMCPPolicy:
+    """Server-side guardrails for a shared Memorycore database.
+
+    Environment variables are deliberately simple so every MCP host can use the
+    same server configuration:
+
+    - MEMORYCORE_CLIENT_ID and MEMORYCORE_CLIENT_ROLE identify this server
+      process. The process, not the MCP caller, supplies this identity.
+    - MEMORYCORE_READ_ONLY=true blocks every mutation.
+    - MEMORYCORE_ALLOWED_PROJECTS=memorycore,hermes limits all access to those
+      projects. An unset value permits all projects.
+    - MEMORYCORE_REQUIRE_APPROVAL=true stores new writes as ``pending`` until
+      a trusted client promotes them to ``active`` with memory_update.
+    """
+
+    def __init__(self, *, read_only: bool = False,
+                 allowed_projects: set[str] | None = None,
+                 require_approval: bool = False,
+                 client_id: str = "memorycore-client",
+                 client_role: str = ClientRole.ADMINISTRATOR.value,
+                 model_provider: str | None = None,
+                 model_name: str | None = None) -> None:
+        self.read_only = read_only
+        self.allowed_projects = allowed_projects
+        self.require_approval = require_approval
+        self.client_id = client_id.strip() or "memorycore-client"
+        self.client_role = validate_client_role(client_role)
+        self.model_provider = model_provider
+        self.model_name = model_name
+
+    @classmethod
+    def from_environment(cls) -> "MemoryMCPPolicy":
+        raw_projects = os.getenv("MEMORYCORE_ALLOWED_PROJECTS", "")
+        projects = {item.strip() for item in raw_projects.split(",") if item.strip()}
+        return cls(
+            read_only=os.getenv("MEMORYCORE_READ_ONLY", "").lower() in {"1", "true", "yes"},
+            allowed_projects=projects or None,
+            require_approval=os.getenv("MEMORYCORE_REQUIRE_APPROVAL", "").lower() in {"1", "true", "yes"},
+            client_id=os.getenv("MEMORYCORE_CLIENT_ID", "memorycore-client"),
+            client_role=os.getenv("MEMORYCORE_CLIENT_ROLE", ClientRole.ADMINISTRATOR.value),
+            model_provider=os.getenv("MEMORYCORE_MODEL_PROVIDER") or None,
+            model_name=os.getenv("MEMORYCORE_MODEL_NAME") or None,
+        )
+
+    def check_project(self, project_id: str) -> None:
+        if self.allowed_projects is not None and project_id not in self.allowed_projects:
+            raise MemoryAccessError(f"project is not allowed by this server: {project_id}")
+
+    def check_mutation(self) -> None:
+        if self.read_only:
+            raise MemoryAccessError("Memorycore is configured as read-only")
+
+    def require_role(self, *roles: ClientRole) -> None:
+        self.check_mutation()
+        if self.client_role not in {role.value for role in roles}:
+            allowed = ", ".join(role.value for role in roles)
+            raise MemoryAccessError(f"role {self.client_role} cannot perform this operation; requires {allowed}")
+
+    def creation_status(self) -> str:
+        if self.require_approval or self.client_role == ClientRole.WRITER.value:
+            return MemoryStatus.PENDING.value
+        return MemoryStatus.ACTIVE.value
 
 
 class MemoryMCPAdapter:
-    def __init__(self, service: MemoryService) -> None:
+    def __init__(self, service: MemoryService,
+                 policy: MemoryMCPPolicy | None = None) -> None:
         self.service = service
+        self.policy = policy or MemoryMCPPolicy.from_environment()
 
     async def memory_add(self, project_id: str, memory_type: str, content: str,
                          summary: str | None = None, tags: list[str] | None = None,
-                         created_by: str | None = None,
-                         metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+                         metadata: dict[str, Any] | None = None,
+                         session_id: str | None = None,
+                         source_type: str = "manual_import",
+                         source_uri: str | None = None,
+                         source_id: str | None = None,
+                         confidence: float | None = None) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
         return self.service.add_memory(project_id=project_id, memory_type=memory_type,
-            content=content, summary=summary, tags=tags, created_by=created_by,
-            metadata=metadata).to_dict()
+            content=content, summary=summary, tags=tags, created_by=self.policy.client_id,
+            metadata=metadata, client_id=self.policy.client_id,
+            model_provider=self.policy.model_provider, model_name=self.policy.model_name,
+            session_id=session_id, source_type=source_type,
+            source_uri=source_uri, source_id=source_id, confidence=confidence,
+            status=self.policy.creation_status()).to_dict()
 
     async def memory_get(self, memory_id: str) -> dict[str, Any] | None:
         memory = self.service.get_memory(memory_id)
+        if memory is not None:
+            self.policy.check_project(memory.project_id)
         return memory.to_dict() if memory else None
 
     async def memory_search(self, query: str, project_id: str, limit: int = 10,
-                            memory_type: str | None = None) -> list[dict[str, Any]]:
+                            memory_type: str | None = None,
+                            status: str = "active") -> list[dict[str, Any]]:
+        self.policy.check_project(project_id)
         return [memory.to_dict() for memory in self.service.search_memory(
-            query=query, project_id=project_id, limit=limit, memory_type=memory_type)]
+            query=query, project_id=project_id, limit=limit, memory_type=memory_type, status=status)]
 
     async def memory_retrieve_context(self, query: str, project_id: str, limit: int = 10,
-                                      memory_type: str | None = None) -> dict[str, Any]:
+                                      memory_type: str | None = None,
+                                      status: str = "active") -> dict[str, Any]:
+        self.policy.check_project(project_id)
         return self.service.retrieve_context(query=query, project_id=project_id,
-            limit=limit, memory_type=memory_type)
+            limit=limit, memory_type=memory_type, status=status)
 
     async def memory_update(self, memory_id: str, content: str | None = None,
                             summary: str | None = None, tags: list[str] | None = None,
-                            metadata: dict[str, Any] | None = None,
-                            status: str | None = None) -> dict[str, Any] | None:
+                            metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
+            if self.policy.client_role == ClientRole.WRITER.value and (
+                existing.status != MemoryStatus.PENDING.value or existing.client_id != self.policy.client_id
+            ):
+                raise MemoryAccessError("writers may only update their own pending memories")
         memory = self.service.update_memory(memory_id, content=content, summary=summary,
-            tags=tags, metadata=metadata, status=status)
+            tags=tags, metadata=metadata, updated_by=self.policy.client_id)
+        return memory.to_dict() if memory else None
+
+    async def memory_approve(self, memory_id: str) -> dict[str, Any] | None:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
+            if existing.client_id == self.policy.client_id:
+                raise MemoryAccessError("a client cannot approve its own memory")
+        memory = self.service.approve_memory(memory_id, approved_by=self.policy.client_id)
+        return memory.to_dict() if memory else None
+
+    async def memory_reject(self, memory_id: str) -> dict[str, Any] | None:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
+        memory = self.service.reject_memory(memory_id, rejected_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
     async def memory_archive(self, memory_id: str) -> dict[str, Any] | None:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        existing = self.service.get_memory(memory_id)
+        if existing is not None:
+            self.policy.check_project(existing.project_id)
         memory = self.service.archive_memory(memory_id)
         return memory.to_dict() if memory else None
 
@@ -52,33 +168,60 @@ class MemoryMCPAdapter:
 
 
 def create_server(service: MemoryService) -> FastMCP:
-    server = FastMCP("Memorycore")
+    server = FastMCP(
+        "Memorycore",
+        instructions=(
+            "Shared durable memory for multiple LLM clients. Retrieve active project "
+            "memory before writing. Memory identity and permissions are assigned by "
+            "the Memorycore service, not supplied by the caller."
+        ),
+    )
     adapter = MemoryMCPAdapter(service)
     server.tool(name="memory_add")(adapter.memory_add)
     server.tool(name="memory_get")(adapter.memory_get)
     server.tool(name="memory_search")(adapter.memory_search)
     server.tool(name="memory_retrieve_context")(adapter.memory_retrieve_context)
     server.tool(name="memory_update")(adapter.memory_update)
+    server.tool(name="memory_approve")(adapter.memory_approve)
+    server.tool(name="memory_reject")(adapter.memory_reject)
     server.tool(name="memory_archive")(adapter.memory_archive)
     server.tool(name="memory_health")(adapter.memory_health)
     return server
 
 
 def default_database_path() -> Path:
+    configured_url = os.getenv("MEMORYCORE_DATABASE_URL")
+    if configured_url:
+        return configured_url  # type: ignore[return-value]
     configured = os.getenv("MEMORYCORE_DB")
     return Path(configured).expanduser() if configured else Path.home() / ".memorycore" / "memorycore.db"
 
 
-def run_server(database_path: str | Path | None = None) -> None:
+def run_server(database_path: str | Path | None = None, *, transport: str | None = None,
+               host: str | None = None, port: int | None = None) -> None:
+    """Run one Memorycore service instance.
+
+    ``streamable-http`` is the central-service transport. Stdio remains useful
+    for local development and hosts that cannot yet connect to HTTP MCP.
+    """
     service = MemoryService(database_path or default_database_path())
     try:
-        create_server(service).run()
+        selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
+        if selected_transport not in {"stdio", "streamable-http", "sse"}:
+            raise ValueError("transport must be stdio, streamable-http, or sse")
+        server = create_server(service)
+        if selected_transport == "stdio":
+            server.run(transport="stdio")
+        else:
+            server.settings.host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+            server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
+            server.run(transport=selected_transport)
     finally:
         service.close()
 
 
 def main() -> None:
-    run_server()
+    run_server(transport=os.getenv("MEMORYCORE_TRANSPORT", "stdio"))
 
 
 if __name__ == "__main__":

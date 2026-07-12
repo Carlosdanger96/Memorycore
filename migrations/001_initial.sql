@@ -13,9 +13,18 @@ CREATE TABLE IF NOT EXISTS memories (
     summary TEXT,
     tags TEXT NOT NULL DEFAULT '[]',
     status TEXT NOT NULL DEFAULT 'active' CHECK (
-        status IN ('active','archived','superseded')
+        status IN ('pending','active','rejected','archived','superseded','contradicted')
     ),
     created_by TEXT,
+    updated_by TEXT,
+    client_id TEXT,
+    model_provider TEXT,
+    model_name TEXT,
+    session_id TEXT,
+    source_type TEXT NOT NULL DEFAULT 'manual_import',
+    source_uri TEXT,
+    source_id TEXT,
+    confidence REAL,
     metadata TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
