@@ -20,6 +20,7 @@ def default_database_path() -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="memorycore")
     parser.add_argument("--db", type=Path, default=default_database_path())
+    parser.add_argument("--database-url", help="PostgreSQL URL; overrides --db")
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("init", help="create or initialize the SQLite database")
     subcommands.add_parser("doctor", help="verify SQLite and FTS5 health")
@@ -38,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    database_target = args.database_url or args.db
 
     if args.command in {"serve", "serve-http"}:
         try:
@@ -51,12 +53,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 2
             raise
         if args.command == "serve-http":
-            run_server(args.db, transport="streamable-http", host=args.host, port=args.port)
+            run_server(database_target, transport="streamable-http", host=args.host, port=args.port)
         else:
-            run_server(args.db, transport="stdio")
+            run_server(database_target, transport="stdio")
         return 0
 
-    service = MemoryService(args.db)
+    service = MemoryService(database_target)
     try:
         if args.command == "backup":
             service.backup(args.destination)
