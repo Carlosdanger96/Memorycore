@@ -25,7 +25,7 @@ Memorycore is not primarily a note-taking application, database experiment, agen
 
 ## Current architecture
 
-Version 0.1 establishes the durable storage foundation required for shared LLM memory:
+The v0.2 prototype establishes the durable storage foundation required for shared LLM memory:
 
 ```text
 Multiple LLM clients
@@ -37,11 +37,14 @@ Multiple LLM clients
 SQLite (local prototype) → PostgreSQL (shared production)
 ```
 
-The current release focuses on one durable SQLite database and one `MemoryService`. It includes an optional stdio MCP adapter with the same record contract for every client, including a real stdio client integration test; the next release gate is deployment guidance and Windows validation.
+The current release includes SQLite storage, audit history, lifecycle controls,
+deterministic retrieval, backup/export/import, and a central MCP service mode.
 
 ## Status
 
-The repository contains the canonical v0.1 storage implementation plus a tested MCP integration boundary. It is not a stable release until GitHub Actions and Windows storage validation pass. The previous experimental implementation remains preserved on the `archive/pre-v0.1-experimental` branch.
+The repository contains the v0.2 prototype foundation. Possible-duplicate
+detection, PostgreSQL integration tests, and the Mistral Vibe ↔ Hermes live
+workflow remain required before calling it a complete shared-memory release.
 
 The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
 
@@ -167,7 +170,8 @@ Each memory records its writer and provenance: `created_by`, `updated_by`,
 `client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
 `source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
 `memory_add`, `memory_get`, `memory_search`, `memory_retrieve_context`,
-`memory_update`, `memory_archive`, and `memory_health`.
+`memory_update`, `memory_approve`, `memory_reject`, `memory_archive`,
+`memory_history`, `memory_supersede`, `memory_correct`, and `memory_health`.
 
 Each local MCP process receives its identity from its environment. This prevents
 an LLM tool call from impersonating another client. Supported roles are
@@ -216,3 +220,4 @@ See [Design Decisions](docs/DESIGN_DECISIONS.md) and the
 [v0.2.0 Prototype Plan](docs/PROTOTYPE_PLAN.md). The local database model and
 implementation checklist are in [SQLite Memory Design](docs/SQLITE_MEMORY_DESIGN.md),
 which defines a core product invariant rather than optional future work.
+For setup and operating commands, see [Install and Operate](docs/INSTALL_AND_OPERATE.md).
