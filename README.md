@@ -22,11 +22,11 @@ Multiple LLMs and integrations
        SQLite + FTS5
 ```
 
-The current release focuses on one durable SQLite database and one `MemoryService`. MCP and direct LLM integrations remain an integration phase, but they are part of the central project goal rather than a separate purpose.
+The current release focuses on one durable SQLite database and one `MemoryService`. It includes an optional stdio MCP adapter with the same record contract for every client, including a real stdio client integration test; the next release gate is deployment guidance and Windows validation.
 
 ## Status
 
-The repository contains the canonical v0.1 storage implementation. It is not a stable release until GitHub Actions and Windows storage validation pass. The previous experimental implementation remains preserved on the `archive/pre-v0.1-experimental` branch.
+The repository contains the canonical v0.1 storage implementation plus a tested MCP integration boundary. It is not a stable release until GitHub Actions and Windows storage validation pass. The previous experimental implementation remains preserved on the `archive/pre-v0.1-experimental` branch.
 
 The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
 
@@ -100,7 +100,8 @@ These operations provide the durable memory layer that future LLM integrations w
 
 ```powershell
 python -m compileall src tests
-pytest --ignore=tests/test_mcp.py
+pip install -e ".[mcp-test]"
+pytest
 ```
 
 The storage test suite covers SQLite CRUD, FTS5 search, project scoping, update/archive behavior, CLI initialization, health checks, and restart persistence.
@@ -113,7 +114,31 @@ MCP is the planned first common interface for connecting multiple LLMs to Memory
 pip install -e ".[mcp]"
 ```
 
-The existing adapter is not considered validated until a real MCP client test is completed. Future supported integrations must preserve the same shared memories rather than creating provider-specific memory silos.
+Run it through the packaged CLI:
+
+```powershell
+memorycore --db .\data\memorycore.db serve
+```
+
+Each memory records its writer and provenance: `created_by`, `updated_by`,
+`client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
+`source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
+`memory_add`, `memory_get`, `memory_search`, `memory_retrieve_context`,
+`memory_update`, `memory_archive`, and `memory_health`.
+
+For shared or remote deployments, configure the server instead of trusting the
+client:
+
+```powershell
+$env:MEMORYCORE_READ_ONLY = "true"                  # block every write
+$env:MEMORYCORE_ALLOWED_PROJECTS = "memorycore,hermes" # limit all reads/writes
+$env:MEMORYCORE_REQUIRE_APPROVAL = "true"           # new MCP writes start pending
+```
+
+An unset allowlist permits all projects. `MEMORYCORE_REQUIRE_APPROVAL` lets a
+trusted client promote a reviewed memory from `pending` to `active` with
+`memory_update`. Future supported integrations must preserve this contract and
+the same shared database rather than creating provider-specific memory silos.
 
 ## v0.1.0 storage release gate
 
