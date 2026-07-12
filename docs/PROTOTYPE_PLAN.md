@@ -36,6 +36,10 @@ of scope until this prototype passes its cross-client test.
 6. **Cross-client proof** — Mistral Vibe as writer and Hermes as approver use
    separate MCP processes and the same database through a restart.
 
+The detailed local storage and retrieval decision is documented in
+[SQLite Memory Design](SQLITE_MEMORY_DESIGN.md). Its ten-part checklist is the
+required implementation order for the SQLite-backed prototype.
+
 ## Completion gate
 
 Tag `v0.2.0-prototype` only when the cross-client proof shows that:
