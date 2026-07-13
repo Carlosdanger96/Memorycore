@@ -1,9 +1,12 @@
 # Web MCP Deployment
 
-ChatGPT web and Mistral web run outside your computer. They cannot connect to
-`localhost`, so Memorycore must be available at one public **HTTPS** MCP URL.
-The database remains private: the public component exposes only `/mcp` and
-forwards it to the Memorycore process.
+Memorycore and SQLite can remain local. ChatGPT web should use OpenAI Secure MCP
+Tunnel, which connects outbound from the local PC and does not make Memorycore
+public. See [OpenAI Secure MCP Tunnel](OPENAI_SECURE_MCP_TUNNEL.md).
+
+Mistral web currently uses a server URL connector. If no Mistral-managed private
+tunnel is available for the account, that connector still needs a protected
+public HTTPS bridge. The database remains private in either design.
 
 ## Security model
 
@@ -31,7 +34,7 @@ a connector you explicitly trust to approve, correct, supersede, or archive.
 Use a project allowlist for every client. The example assigns ChatGPT a writer
 role and Mistral an approver role; change that deliberately for your workflow.
 
-## Start the protected MCP service
+## Start the protected MCP service for a public URL connector
 
 Set the service configuration on the machine that owns the database:
 
@@ -48,7 +51,7 @@ tunnel, or hosted gateway in front of it. The proxy must forward the
 `Authorization: Bearer …` header unchanged and must not provide direct access
 to the SQLite files.
 
-## Connect web applications
+## Connect URL-based web applications
 
 In each provider's custom MCP connector settings, enter:
 
