@@ -159,12 +159,14 @@ $env:MEMORYCORE_ALLOW_INSECURE_HTTP = "true" # isolated local testing only
 memorycore --db .\data\memorycore.db serve-http --host 127.0.0.1 --port 8000
 ```
 
-Clients then connect to `http://127.0.0.1:8000/mcp`. For ChatGPT web or
-Mistral web, run the same service behind a public HTTPS tunnel and configure
-per-client bearer tokens. The endpoint refuses to start without a token
-registry unless the isolated-testing override above is set. See [Web MCP
-Deployment](docs/WEB_MCP_DEPLOYMENT.md). The SQLite backend remains appropriate
-for one-host prototypes; PostgreSQL is the production multi-host target.
+Clients then connect to `http://127.0.0.1:8000/mcp`. ChatGPT web can reach this
+private endpoint through [OpenAI Secure MCP
+Tunnel](docs/OPENAI_SECURE_MCP_TUNNEL.md), without publishing Memorycore or
+moving SQLite off the PC. URL-based web connectors such as Mistral still need a
+protected HTTPS bridge unless the provider supplies its own private tunnel. The
+HTTP endpoint refuses to start without a token registry unless the isolated
+testing override above is set. See [Web MCP
+Deployment](docs/WEB_MCP_DEPLOYMENT.md).
 
 To switch the central service to PostgreSQL, copy `.env.example`, start the
 included local PostgreSQL container, install `.[postgres,mcp]`, then set
