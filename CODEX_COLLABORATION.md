@@ -48,8 +48,9 @@ separate approver action before canonical state changes.
 - Focused Omni suite: 17 passed.
 - Offline demo: passed with one verified correction use and one success.
 - Evidence export: test and demo exit codes 0.
-- Hosted Windows, Linux, Python 3.11–3.13, demo, security, and migration CI passed
-  in workflow run `29700494661`.
+- Hosted Windows, Linux, Python 3.11–3.13, packaged-install, demo, artifact,
+  security, and migration checks are tracked by the [latest branch
+  workflow](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness).
 - The remote baseline tag, screenshots, and `/feedback` ID remain manual evidence tasks.
 
 ## Codex feedback evidence

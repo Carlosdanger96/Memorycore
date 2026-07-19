@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from time import perf_counter
 from typing import Any, Sequence
 
 from ..memory_service import MemoryService
@@ -20,9 +21,19 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _synthetic_repository() -> Path:
+    source_fixture = _repository_root() / "demo" / "synthetic-agent"
+    if source_fixture.is_dir():
+        return source_fixture
+    packaged_fixture = Path(__file__).resolve().parent / "fixtures" / "synthetic-agent"
+    if packaged_fixture.is_dir():
+        return packaged_fixture
+    raise RuntimeError("synthetic agent fixture is missing from this installation")
+
+
 def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
-    repo_root = _repository_root()
-    synthetic_repo = repo_root / "demo" / "synthetic-agent"
+    started = perf_counter()
+    synthetic_repo = _synthetic_repository()
     output_root = Path(workspace).expanduser().resolve() if workspace else Path(
         tempfile.mkdtemp(prefix="omni-memory-harness-")
     )
@@ -144,6 +155,9 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
         if not conflicts:
             raise RuntimeError("deterministic auditor did not identify the seeded contradiction")
         approved_finding = omni.approve_revision(conflicts[0]["finding_id"], approved_by="demo-approver")
+        revision_events = service.database.list_omni_revision_events(approved_finding["finding_id"])
+        if not revision_events:
+            raise RuntimeError("approved revision did not create an immutable decision event")
         if service.get_memory(old_memory.id) is None or service.get_memory(new_memory.id) is None:
             raise RuntimeError("audit revision destroyed an original memory")
 
@@ -157,8 +171,10 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
 
         report = {
             "ok": True, "generated_at": _now(), "mode": "offline-deterministic",
+            "duration_seconds": round(perf_counter() - started, 4),
             "workspace": str(output_root), "database": str(database),
             "vault": str(vault), "behavior_count": len(behaviors),
+            "repository_revision": behaviors[0]["source_revision"],
             "failed_trajectory_id": failed["trajectory_id"],
             "successful_trajectory_id": successful["trajectory_id"],
             "error_signature": signature, "correction_id": correction["correction_id"],
@@ -167,6 +183,7 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
             "correction_success_count": outcome_record["correction"]["success_count"],
             "correction_outcome_event_id": outcome_record["event"]["event_id"],
             "finding_id": approved_finding["finding_id"],
+            "revision_decision_id": revision_events[-1]["event_id"],
             "replacement_memory_id": approved_finding["proposed_record"]["created_memory_id"],
             "original_memory_ids_preserved": [old_memory.id, new_memory.id],
             "projection_root": projection["root"],

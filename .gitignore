@@ -15,3 +15,6 @@ http-clients.json
 dist/
 build/
 evidence/
+ci-artifacts/
+wheel-demo/
+wheel-test/

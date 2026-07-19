@@ -62,8 +62,11 @@ Latest focused Omni verification:
 17 passed
 ```
 
-Hosted workflow run `29700494661` passed all six jobs: Python 3.11, 3.12, and
-3.13; offline demo; security and migration; and Windows PowerShell smoke.
+The [latest hackathon branch workflow](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness)
+runs Python 3.11, 3.12, and 3.13, the deterministic source demo, isolated
+wheel installation, the Windows source-and-wheel smoke test, and focused
+security and migration checks. It uploads the wheel, source archive, evidence
+bundle, structured demo report, schemas, and synthetic vault.
 
 ## Live GPT-5.6 mode
 

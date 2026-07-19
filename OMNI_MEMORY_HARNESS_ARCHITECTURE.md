@@ -143,7 +143,7 @@ Use these labels in implementation notes and pull-request descriptions:
 | 9 | MCP and REST | `DONE` | Outcome endpoint/tool and schema parity implemented |
 | 10 | Obsidian | `DONE` | Reuse metric and successful-run links implemented |
 | 11 | Demo | `DONE` | Clean Linux and hosted Windows paths passed |
-| 12 | CI/security | `DONE` | All six hosted jobs passed in run `29700494661` |
+| 12 | CI/security | `DONE` | Hosted matrix, packaged install, artifacts, and security gates are tracked by the [latest branch workflow](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness) |
 | 13 | Evidence/PR | `TODO` | Remote evidence, feedback ID, and draft PR |
 
 ## 5. Ordered implementation plan
@@ -652,7 +652,9 @@ key and no preinstalled editable package.
 
 ### Step 12 — Add CI and security regression checks
 
-**Status:** `DONE`; all six jobs passed in hosted workflow run `29700494661`.
+**Status:** `DONE`; the hosted matrix, packaged-install proof, artifacts, and
+security checks are tracked by the [latest branch
+workflow](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness).
 
 **Objective:** make the proof repeatable by reviewers rather than dependent on one
 developer machine.

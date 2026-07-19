@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 import importlib.metadata
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -37,14 +38,21 @@ def main() -> int:
         result = _run(command)
         (output / filename).write_text(result.stdout + result.stderr, encoding="utf-8")
 
-    environment = dict(__import__("os").environ)
-    environment["PYTHONPATH"] = str(ROOT / "src") + __import__("os").pathsep + environment.get("PYTHONPATH", "")
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(ROOT / "src") + os.pathsep + environment.get("PYTHONPATH", "")
     tests = _run([sys.executable, "-m", "pytest", "-q"], env=environment)
     (output / "test-output.txt").write_text(tests.stdout + tests.stderr, encoding="utf-8")
     with tempfile.TemporaryDirectory(prefix="omni-evidence-demo-") as directory:
         demo = _run([
             sys.executable, "-m", "memorycore.demo.runner", "--workspace", directory,
         ], env=environment)
+        demo_root = Path(directory)
+        if (demo_root / "demo-report.json").is_file():
+            shutil.copy2(demo_root / "demo-report.json", output / "demo-report.json")
+        if (demo_root / "synthetic-vault").is_dir():
+            shutil.copytree(
+                demo_root / "synthetic-vault", output / "synthetic-vault", dirs_exist_ok=True,
+            )
     (output / "demo-output.txt").write_text(demo.stdout + demo.stderr, encoding="utf-8")
 
     from memorycore.api.omni_routes import openapi_schema
@@ -72,10 +80,13 @@ def main() -> int:
 
     for filename in [
         "BEFORE_HACKATHON.md", "HACKATHON_CHANGES.md", "CODEX_COLLABORATION.md",
-        "THIRD_PARTY_NOTICES.md", "TESTING.md", "DEMO_SCRIPT.md",
+        "THIRD_PARTY_NOTICES.md", "TESTING.md", "DEMO_SCRIPT.md", "RESULTS.md",
+        "OMNI_MEMORY_HARNESS_ARCHITECTURE.md", "LICENSE",
     ]:
         shutil.copy2(ROOT / filename, output / filename)
-    (output / "CODEX_SESSION_ID.txt").write_text("REQUIRED — run /feedback and record the actual session ID here.\n", encoding="utf-8")
+    session_id = os.environ.get("CODEX_SESSION_ID", "").strip()
+    session_text = session_id + "\n" if session_id else "UNRESOLVED — run /feedback and set CODEX_SESSION_ID before final export.\n"
+    (output / "CODEX_SESSION_ID.txt").write_text(session_text, encoding="utf-8")
     (output / "screenshots" / "README.md").write_text("Add actual screenshots or recordings here. Do not fabricate evidence.\n", encoding="utf-8")
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),

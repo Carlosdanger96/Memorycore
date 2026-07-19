@@ -7,8 +7,16 @@ name = "memorycore"
 version = "0.1.0.dev0"
 description = "Shared durable memory service for multiple LLMs and agents"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
@@ -26,6 +34,9 @@ memorycore-demo = "memorycore.demo.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"memorycore.demo" = ["fixtures/synthetic-agent/*.py", "fixtures/synthetic-agent/*.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

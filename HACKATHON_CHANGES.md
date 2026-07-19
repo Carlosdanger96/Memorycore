@@ -53,8 +53,9 @@
 - Projection idempotency: second generation performs zero writes.
 - Evidence export: passed with test and demo exit codes 0.
 - Linux one-command entrypoint: passed with focused tests and startup commands.
-- Hosted CI run `29700494661`: all six jobs passed, including Python 3.11–3.13,
-  offline demo, security/migration, and the Windows PowerShell smoke test.
+- The [latest hackathon branch workflow](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness)
+  runs Python 3.11–3.13, Windows source-and-wheel smoke tests, deterministic
+  demo, packaged installation, artifact export, and security/migration checks.
 - Optional live GPT-5.6 request: reached OpenAI but the selected Default project returned HTTP 403 because that project lacks access to `gpt-5.6`.
 
 Commit identifiers will be supplied by the actual Git history. This document

@@ -34,10 +34,54 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -e ".[mcp-test]"
-      - run: ./scripts/demo.sh
+      - run: ./scripts/demo.sh --workspace ci-artifacts/demo
         env:
           MEMORYCORE_DEMO_PYTHON: python
-      - run: python scripts/verify_demo.py
+      - run: python scripts/verify_demo.py --report ci-artifacts/demo/demo-report.json
+      - name: Export hackathon evidence
+        run: python scripts/export_evidence.py --output ci-artifacts/evidence
+      - name: Upload evidence, schemas, report, and demo vault
+        uses: actions/upload-artifact@v4
+        with:
+          name: omni-memory-harness-evidence
+          path: |
+            ci-artifacts/evidence/
+            ci-artifacts/demo/demo-report.json
+            ci-artifacts/demo/synthetic-vault/
+          retention-days: 30
+
+  packaged-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install build
+      - run: python -m build
+      - run: python -m venv wheel-test
+      - run: wheel-test/bin/python -m pip install dist/memorycore-*.whl
+      - run: wheel-test/bin/memorycore-demo --workspace wheel-demo
+      - name: Verify wheel demo proof
+        run: |
+          wheel-test/bin/python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("wheel-demo/demo-report.json").read_text(encoding="utf-8"))
+          assert report["ok"] is True
+          assert report["correction_success_count"] == 1
+          assert report["projected_file_count"] >= 14
+          PY
+      - name: Upload wheel and packaged-demo proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: omni-memory-harness-wheel
+          path: |
+            dist/*
+            wheel-demo/demo-report.json
+            wheel-demo/synthetic-vault/
+          retention-days: 30
 
   windows-smoke:
     runs-on: windows-latest
@@ -52,6 +96,25 @@ jobs:
         run: .\scripts\demo.ps1
         env:
           MEMORYCORE_DEMO_PYTHON: python
+      - run: python -m pip install build
+      - run: python -m build
+      - run: python -m venv wheel-test
+      - shell: pwsh
+        run: |
+          $Wheel = (Get-ChildItem dist\memorycore-*.whl | Select-Object -First 1).FullName
+          .\wheel-test\Scripts\python.exe -m pip install $Wheel
+          .\wheel-test\Scripts\memorycore-demo.exe --workspace wheel-demo
+          $Report = Get-Content wheel-demo\demo-report.json | ConvertFrom-Json
+          if (-not $Report.ok -or $Report.correction_success_count -ne 1) { exit 1 }
+      - name: Upload Windows packaged-demo proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: omni-memory-harness-windows-wheel
+          path: |
+            dist/*
+            wheel-demo/demo-report.json
+            wheel-demo/synthetic-vault/
+          retention-days: 30
 
   security-and-migration:
     runs-on: ubuntu-latest

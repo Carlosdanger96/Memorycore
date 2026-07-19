@@ -7,6 +7,9 @@ from memorycore.memory_service import MemoryService
 def test_full_failed_to_corrected_demo_persists_across_restart(tmp_path):
     report = run_demo(tmp_path / "run")
     assert report["ok"] is True
+    assert report["duration_seconds"] >= 0
+    assert report["repository_revision"]
+    assert report["revision_decision_id"].startswith("revision_")
     assert report["correction_id"] in report["retrieved_correction_ids"]
     loaded = json.loads((tmp_path / "run" / "demo-report.json").read_text(encoding="utf-8"))
     assert loaded["successful_trajectory_id"] == report["successful_trajectory_id"]
