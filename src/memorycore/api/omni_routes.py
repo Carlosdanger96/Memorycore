@@ -100,6 +100,15 @@ class OmniAPIRouter:
             ))
         if method == "POST" and path.endswith("/approve") and path.startswith("/v1/omni/corrections/"):
             return asyncio.run(adapter.omni_approve_correction(path.split("/")[-2]))
+        if method == "POST" and path.endswith("/outcomes") and path.startswith("/v1/omni/corrections/"):
+            return asyncio.run(adapter.omni_record_correction_outcome(
+                path.split("/")[-2],
+                self._required(body.get("trajectory_id"), "trajectory_id"),
+                self._required(body.get("outcome"), "outcome"),
+                self._required(body.get("evidence_event_id"), "evidence_event_id"),
+                self._required(body.get("request_id"), "request_id"),
+                details=body.get("details"),
+            ))
         if method == "POST" and path == "/v1/omni/context-packs":
             return asyncio.run(adapter.omni_build_context_pack(
                 self._required(project_id, "project_id"),
@@ -161,6 +170,7 @@ def create_api_server(service: MemoryService, verifier: StaticTokenVerifier,
                 body = json.loads(raw) if raw else {}
                 if not isinstance(body, dict):
                     raise ValueError("JSON body must be an object")
+                body.setdefault("request_id", request_id)
                 parsed = urlsplit(self.path)
                 result = router.dispatch(self.command, parsed.path, parse_qs(parsed.query), body, identity)
                 self._json(200, {"request_id": request_id, "result": result})
@@ -222,6 +232,7 @@ def openapi_schema() -> dict[str, Any]:
         "/v1/omni/trajectories/{trajectory_id}/events": ["post"],
         "/v1/omni/corrections": ["get", "post"],
         "/v1/omni/corrections/{correction_id}/approve": ["post"],
+        "/v1/omni/corrections/{correction_id}/outcomes": ["post"],
         "/v1/omni/context-packs": ["post"], "/v1/omni/audits": ["post"],
         "/v1/omni/findings/{finding_id}/approve": ["post"],
         "/v1/omni/projections/obsidian": ["post"],

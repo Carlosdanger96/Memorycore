@@ -152,6 +152,25 @@ CREATE TABLE IF NOT EXISTS omni_revision_events (
 
 CREATE INDEX IF NOT EXISTS idx_omni_revision_finding
 ON omni_revision_events(finding_id, created_at);
+
+CREATE TABLE IF NOT EXISTS omni_correction_events (
+    event_id TEXT PRIMARY KEY,
+    correction_id TEXT NOT NULL,
+    trajectory_id TEXT,
+    event_type TEXT NOT NULL CHECK (
+        event_type IN ('proposed','approved','applied','succeeded','failed','partial','rejected','superseded')
+    ),
+    outcome TEXT CHECK (outcome IS NULL OR outcome IN ('succeeded','failed','partial')),
+    evidence_event_id TEXT,
+    actor TEXT,
+    request_id TEXT,
+    details TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(correction_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_omni_correction_events
+ON omni_correction_events(correction_id, created_at, event_id);
 """
 
 
@@ -218,6 +237,25 @@ class SQLiteDatabase:
                 );
                 CREATE INDEX IF NOT EXISTS idx_omni_revision_finding
                 ON omni_revision_events(finding_id, created_at);
+            """),
+            (4, "correction_outcome_events", """
+                CREATE TABLE IF NOT EXISTS omni_correction_events (
+                    event_id TEXT PRIMARY KEY,
+                    correction_id TEXT NOT NULL,
+                    trajectory_id TEXT,
+                    event_type TEXT NOT NULL CHECK (
+                        event_type IN ('proposed','approved','applied','succeeded','failed','partial','rejected','superseded')
+                    ),
+                    outcome TEXT CHECK (outcome IS NULL OR outcome IN ('succeeded','failed','partial')),
+                    evidence_event_id TEXT,
+                    actor TEXT,
+                    request_id TEXT,
+                    details TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(correction_id, request_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_omni_correction_events
+                ON omni_correction_events(correction_id, created_at, event_id);
             """),
         ]
         applied = {row[0]: row[1] for row in self.connection.execute("SELECT version, checksum FROM schema_migrations")}
@@ -589,6 +627,84 @@ class SQLiteDatabase:
                 (finding_id,),
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
+
+    def add_omni_correction_event(self, event: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        with self._lock:
+            if event.get("request_id"):
+                row = self.connection.execute(
+                    """SELECT * FROM omni_correction_events
+                    WHERE correction_id=? AND request_id=?""",
+                    (event["correction_id"], event["request_id"]),
+                ).fetchone()
+                if row:
+                    return self._correction_event_from_row(row), False
+            self._insert_omni_correction_event(event)
+            self.connection.commit()
+        return event, True
+
+    def record_omni_correction_outcome(
+        self, correction: dict[str, Any], event: dict[str, Any],
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically append one outcome and update its materialized correction."""
+        with self._lock:
+            row = self.connection.execute(
+                """SELECT * FROM omni_correction_events
+                WHERE correction_id=? AND request_id=?""",
+                (event["correction_id"], event["request_id"]),
+            ).fetchone()
+            if row:
+                return self._correction_event_from_row(row), False
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                self._insert_omni_correction_event(event)
+                payload = json.dumps(correction, ensure_ascii=False, sort_keys=True)
+                self.connection.execute(
+                    """UPDATE omni_records SET status=?, repository=?, task_type=?,
+                    error_signature=?, behavior_ids=?, confidence=?, record_json=?, updated_at=?
+                    WHERE record_id=? AND record_type='correction'""",
+                    (
+                        correction["status"], correction["repository"], correction["task_type"],
+                        correction.get("error_signature"),
+                        json.dumps(correction.get("behavior_ids", []), ensure_ascii=False),
+                        correction.get("confidence"), payload, correction["updated_at"],
+                        correction["correction_id"],
+                    ),
+                )
+                if self.connection.execute("SELECT changes()").fetchone()[0] != 1:
+                    raise ValueError("correction materialized record was not updated")
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        return event, True
+
+    def list_omni_correction_events(self, correction_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT * FROM omni_correction_events
+                WHERE correction_id=? ORDER BY created_at, event_id""",
+                (correction_id,),
+            ).fetchall()
+        return [self._correction_event_from_row(row) for row in rows]
+
+    def _insert_omni_correction_event(self, event: dict[str, Any]) -> None:
+        self.connection.execute(
+            """INSERT INTO omni_correction_events (
+                event_id, correction_id, trajectory_id, event_type, outcome,
+                evidence_event_id, actor, request_id, details, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event["event_id"], event["correction_id"], event.get("trajectory_id"),
+                event["event_type"], event.get("outcome"), event.get("evidence_event_id"),
+                event.get("actor"), event.get("request_id"),
+                json.dumps(event.get("details", {}), ensure_ascii=False, sort_keys=True),
+                event["created_at"],
+            ),
+        )
+
+    @staticmethod
+    def _correction_event_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {**dict(row), "details": json.loads(row["details"])}
 
     def find_exact_active(self, project_id: str, memory_type: str, content: str) -> Memory | None:
         with self._lock:

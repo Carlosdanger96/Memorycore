@@ -344,6 +344,22 @@ class MemoryMCPAdapter:
             tool_name=tool_name, limit=limit,
         )
 
+    async def omni_record_correction_outcome(
+        self, correction_id: str, trajectory_id: str, outcome: str,
+        evidence_event_id: str, request_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        record = self.service.database.get_omni_record(correction_id, "correction")
+        if record is None:
+            raise ValueError("correction not found")
+        self.policy.check_project(record["project_id"])
+        return self.omni.record_correction_outcome(
+            correction_id, trajectory_id=trajectory_id, outcome=outcome,
+            evidence_event_id=evidence_event_id, actor=self.policy.client_id,
+            request_id=request_id, details=details,
+        )
+
     async def omni_build_context_pack(self, project_id: str, query: str,
                                       task_type: str, behavior_ids: list[str] | None = None,
                                       repository: str | None = None,
@@ -421,6 +437,7 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     server.tool(name="omni_extract_correction")(adapter.omni_extract_correction)
     server.tool(name="omni_approve_correction")(adapter.omni_approve_correction)
     server.tool(name="omni_search_corrections")(adapter.omni_search_corrections)
+    server.tool(name="omni_record_correction_outcome")(adapter.omni_record_correction_outcome)
     server.tool(name="omni_build_context_pack")(adapter.omni_build_context_pack)
     server.tool(name="omni_audit_memories")(adapter.omni_audit_memories)
     server.tool(name="omni_approve_revision")(adapter.omni_approve_revision)

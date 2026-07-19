@@ -28,7 +28,8 @@ signature and the `agent.output.verify` behavior reference.
 ## 1:20–1:50 — Correction and successful rerun
 
 Open the active `require_verification` correction. Show its failed-trajectory
-evidence and approval state. Open the successful trajectory and show that the
+evidence, immutable proposal/approval/application/outcome events, and **1/1
+successful reuse** metric. Open the successful trajectory and show that the
 context pack retrieved the correction before execution, followed by
 `correction_applied`, `verification_run`, and `task_completed`.
 
@@ -42,7 +43,8 @@ silent rewrite.
 ## 2:20–2:40 — Obsidian and provenance
 
 Return to `Dashboard.md`. Show counts, links, stable frontmatter, and the notice
-that Markdown edits do not mutate canonical Memorycore data. Open the projection
+that Markdown edits do not mutate canonical Memorycore data. Point to the
+correction reuse success ratio, then open the projection
 manifest and approval decision.
 
 ## 2:40–2:55 — Codex and GPT-5.6

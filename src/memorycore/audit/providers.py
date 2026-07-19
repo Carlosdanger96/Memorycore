@@ -7,6 +7,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from ..omni_security import bounded_redact
+
 
 class AuditProvider(ABC):
     model: str
@@ -79,14 +81,21 @@ class OpenAIResponsesAuditProvider(AuditProvider):
         )
 
     def find(self, memories: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        safe_memories = [{
+        safe_memories = [bounded_redact({
             "id": item["id"], "memory_type": item["memory_type"],
-            "content": item["content"][:4000], "summary": item.get("summary"),
-            "tags": item.get("tags", []), "confidence": item.get("confidence"),
-            "source_type": item.get("source_type"), "source_uri": item.get("source_uri"),
-            "metadata": item.get("metadata", {}), "created_at": item.get("created_at"),
+            "content": item["content"], "summary": item.get("summary"),
+            "tags": item.get("tags", [])[:50], "confidence": item.get("confidence"),
+            "source_type": item.get("source_type"),
+            "metadata": {
+                key: item.get("metadata", {}).get(key)
+                for key in ("claim_key", "scope", "repository", "behavior_id")
+                if key in item.get("metadata", {})
+            },
+            "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
-        } for item in memories[:100]]
+        }, max_string=4000, max_items=100) for item in memories[:100]]
+        while safe_memories and len(json.dumps({"memories": safe_memories}, ensure_ascii=False)) > 100_000:
+            safe_memories.pop()
         payload = {
             "model": self.model,
             "store": False,

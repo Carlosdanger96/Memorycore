@@ -13,9 +13,12 @@ def main() -> int:
         required = {
             "ok", "failed_trajectory_id", "successful_trajectory_id", "correction_id",
             "retrieved_correction_ids", "finding_id", "projection_root",
+            "correction_outcome_event_id", "correction_success_count",
         }
         missing = required - report.keys()
-        if missing or not report["ok"] or report["correction_id"] not in report["retrieved_correction_ids"]:
+        if (missing or not report["ok"] or
+                report["correction_id"] not in report["retrieved_correction_ids"] or
+                report.get("correction_success_count") != 1):
             print(json.dumps({"ok": False, "missing": sorted(missing)}, indent=2))
             return 1
         print(json.dumps({

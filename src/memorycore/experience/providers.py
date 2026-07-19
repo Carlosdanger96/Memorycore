@@ -7,6 +7,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from ..omni_security import bounded_redact
+
 
 class CorrectionProvider(ABC):
     model: str
@@ -53,6 +55,14 @@ class OpenAIResponsesCorrectionProvider(CorrectionProvider):
         )
 
     def extract(self, failed: dict[str, Any], successful: dict[str, Any] | None = None) -> dict[str, Any]:
+        safe_failed = self._safe_trajectory(failed)
+        safe_successful = self._safe_trajectory(successful) if successful else None
+        provider_input = {"failed_trajectory": safe_failed, "successful_comparison": safe_successful}
+        while (safe_successful and safe_successful["events"] and
+               len(json.dumps(provider_input, ensure_ascii=False)) > 100_000):
+            safe_successful["events"].pop()
+        while safe_failed["events"] and len(json.dumps(provider_input, ensure_ascii=False)) > 100_000:
+            safe_failed["events"].pop(0)
         payload = {
             "model": self.model, "store": False,
             "instructions": (
@@ -60,7 +70,7 @@ class OpenAIResponsesCorrectionProvider(CorrectionProvider):
                 "Use only the supported operation enum. Cite evidence event IDs. Do not return "
                 "free-form reflection or invent events."
             ),
-            "input": json.dumps({"failed_trajectory": failed, "successful_comparison": successful}, ensure_ascii=False)[:100_000],
+            "input": json.dumps(provider_input, ensure_ascii=False),
             "text": {"format": {"type": "json_schema", "name": "experience_correction",
                                  "strict": True, "schema": _CORRECTION_SCHEMA}},
         }
@@ -83,6 +93,30 @@ class OpenAIResponsesCorrectionProvider(CorrectionProvider):
         if not text:
             raise RuntimeError("OpenAI correction response did not contain output text")
         return json.loads(text)
+
+    @staticmethod
+    def _safe_trajectory(trajectory: dict[str, Any]) -> dict[str, Any]:
+        allowed = {
+            "trajectory_id": trajectory.get("trajectory_id"),
+            "project_id": trajectory.get("project_id"),
+            "task_type": trajectory.get("task_type"),
+            "task_description": trajectory.get("task_description"),
+            "agent_id": trajectory.get("agent_id"),
+            "repository": trajectory.get("repository"),
+            "source_revision": trajectory.get("source_revision"),
+            "outcome": trajectory.get("outcome"),
+            "reward": trajectory.get("reward"),
+            "error_signature": trajectory.get("error_signature"),
+            "events": [{
+                key: event.get(key)
+                for key in (
+                    "event_id", "sequence", "event_type", "behavior_ids", "memory_ids",
+                    "correction_ids", "tool_name", "redacted_input", "redacted_output",
+                    "error_signature", "outcome",
+                )
+            } for event in trajectory.get("events", [])[:500]],
+        }
+        return bounded_redact(allowed, max_string=4000, max_items=500)
 
     @staticmethod
     def _output_text(response: dict[str, Any]) -> str | None:

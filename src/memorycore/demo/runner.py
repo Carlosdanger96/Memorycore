@@ -117,8 +117,9 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
             ("verification_run", ["agent.output.verify"], [correction["correction_id"]], None),
             ("task_completed", ["agent.loop.terminate"], [correction["correction_id"]], None),
         ]
+        completed_event_id = ""
         for sequence, (event_type, event_behaviors, correction_ids, tool) in enumerate(success_events, 1):
-            omni.append_trajectory_event(
+            saved_event = omni.append_trajectory_event(
                 successful["trajectory_id"], event_type=event_type, sequence=sequence,
                 request_id=f"success-{sequence}", behavior_ids=event_behaviors,
                 correction_ids=correction_ids, tool_name=tool,
@@ -126,6 +127,17 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
                 if event_type in {"tool_result", "verification_run"} else None,
                 outcome="success" if event_type == "task_completed" else None,
             )
+            if event_type == "task_completed":
+                completed_event_id = saved_event["event_id"]
+
+        outcome_record = omni.record_correction_outcome(
+            correction["correction_id"], trajectory_id=successful["trajectory_id"],
+            outcome="succeeded", evidence_event_id=completed_event_id,
+            actor="synthetic-agent-v1", request_id="demo-correction-outcome-success",
+            details={"verification": "passed"},
+        )
+        if outcome_record["correction"]["success_count"] != 1:
+            raise RuntimeError("successful correction reuse was not materialized")
 
         findings = omni.audit_memories(project_id="omni-demo")
         conflicts = [item for item in findings if item["finding_type"] == "contradiction"]
@@ -151,6 +163,9 @@ def run_demo(workspace: str | Path | None = None) -> dict[str, Any]:
             "successful_trajectory_id": successful["trajectory_id"],
             "error_signature": signature, "correction_id": correction["correction_id"],
             "retrieved_correction_ids": retrieved_ids,
+            "correction_use_count": outcome_record["correction"]["use_count"],
+            "correction_success_count": outcome_record["correction"]["success_count"],
+            "correction_outcome_event_id": outcome_record["event"]["event_id"],
             "finding_id": approved_finding["finding_id"],
             "replacement_memory_id": approved_finding["proposed_record"]["created_memory_id"],
             "original_memory_ids_preserved": [old_memory.id, new_memory.id],

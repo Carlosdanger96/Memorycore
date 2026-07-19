@@ -70,6 +70,10 @@ any required proof fails.
 
 See [TESTING.md](TESTING.md) and [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
 
+For the component architecture, ordered implementation phases, acceptance
+gates, and LLM continuation protocol, see
+[OMNI_MEMORY_HARNESS_ARCHITECTURE.md](OMNI_MEMORY_HARNESS_ARCHITECTURE.md).
+
 ## Status
 
 The repository contains the v0.2 prototype foundation. Possible-duplicate

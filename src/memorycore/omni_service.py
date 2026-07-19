@@ -16,8 +16,10 @@ from .models import MemoryStatus
 from .omni_models import (
     AuditFinding, AuditFindingType, BehaviorRecord, ExperienceCorrection,
     OmniRecordType, Trajectory, TrajectoryEvent,
-    validate_correction_operation, validate_event_type,
+    validate_correction_event_type, validate_correction_operation,
+    validate_correction_outcome, validate_event_type,
 )
+from .omni_security import redact
 from .projections import ObsidianProjection
 from .experience import (
     CorrectionProvider, DeterministicCorrectionProvider, OpenAIResponsesCorrectionProvider,
@@ -27,31 +29,11 @@ if TYPE_CHECKING:
     from .memory_service import MemoryService
 
 
-_SECRET_KEY = re.compile(
-    r"authorization|api[_-]?key|password|passwd|cookie|secret|token", re.IGNORECASE,
-)
-_SECRET_VALUE = re.compile(
-    r"(?i)(bearer\s+)[a-z0-9._~+/-]{8,}|(sk-[a-z0-9_-]{8,})|"
-    r"((?:api[_-]?key|password|token|secret)\s*[:=]\s*)\S+"
-)
 _MACHINE_PATH = re.compile(r"(?:[A-Za-z]:)?[/\\](?:[^\s:/\\]+[/\\])+[^\s:]+")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def redact(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: "[REDACTED]" if _SECRET_KEY.search(str(key)) else redact(item)
-                for key, item in value.items()}
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    if isinstance(value, tuple):
-        return [redact(item) for item in value]
-    if isinstance(value, str):
-        return _SECRET_VALUE.sub(lambda match: (match.group(1) or match.group(3) or "") + "[REDACTED]", value)
-    return value
 
 
 def error_signature(*, error_type: str, message: str, behavior_id: str | None,
@@ -172,6 +154,14 @@ class OmniHarnessService:
                           trajectory_id: str | None = None) -> dict[str, Any]:
         if not all(item.strip() for item in (project_id, task_type, task_description, agent_id, repository)):
             raise ValueError("trajectory identity fields are required")
+        if parent_trajectory_id:
+            parent = self.database.get_omni_record(
+                parent_trajectory_id, OmniRecordType.TRAJECTORY.value,
+            )
+            if parent is None:
+                raise ValueError("parent trajectory not found")
+            if parent["project_id"] != project_id or parent["repository"] != repository:
+                raise ValueError("parent trajectory is outside the trajectory scope")
         record = Trajectory(
             trajectory_id=trajectory_id or f"traj_{uuid4().hex}", project_id=project_id.strip(),
             task_type=task_type.strip(), task_description=task_description.strip()[:4000],
@@ -213,8 +203,31 @@ class OmniHarnessService:
             for item in existing:
                 if item.get("request_id") == request_id:
                     return item
+        if any(item["event_type"] in {"task_completed", "task_failed"} for item in existing):
+            raise ValueError("cannot append events after a terminal trajectory event")
         if sequence != len(existing) + 1:
             raise ValueError(f"trajectory sequence must be {len(existing) + 1}")
+        if parent_event_id and parent_event_id not in {item["event_id"] for item in existing}:
+            raise ValueError("parent event is not part of this trajectory")
+        project_id = trajectory["project_id"]
+        registered_behaviors = self.database.list_omni_records(
+            OmniRecordType.BEHAVIOR.value, project_id, status="active", limit=10_000,
+        )
+        if registered_behaviors:
+            known_behaviors = {item["behavior_id"] for item in registered_behaviors}
+            unknown_behaviors = set(behavior_ids or []) - known_behaviors
+            if unknown_behaviors:
+                raise ValueError(f"unknown behavior references: {sorted(unknown_behaviors)}")
+        for memory_id in memory_ids or []:
+            memory = self.memory_service.get_memory(memory_id)
+            if memory is None or memory.project_id != project_id:
+                raise ValueError(f"memory reference is outside the trajectory project: {memory_id}")
+        for correction_id in correction_ids or []:
+            correction = self.database.get_omni_record(
+                correction_id, OmniRecordType.CORRECTION.value,
+            )
+            if correction is None or correction["project_id"] != project_id:
+                raise ValueError(f"correction reference is outside the trajectory project: {correction_id}")
         redacted_input, redacted_output = redact(input_data), redact(output_data)
         if len(json.dumps([redacted_input, redacted_output], default=str)) > 65_536:
             raise ValueError("trajectory event content exceeds 65536 bytes")
@@ -229,6 +242,15 @@ class OmniHarnessService:
             metadata=redact(metadata or {}), request_id=request_id,
         ).to_dict()
         saved, _ = self.database.append_omni_event(event)
+        if event_type == "correction_applied":
+            for correction_id in sorted(set(correction_ids or [])):
+                self._append_correction_event(
+                    correction_id=correction_id, event_type="applied",
+                    trajectory_id=trajectory_id, evidence_event_id=saved["event_id"],
+                    actor=str(event["metadata"].get("client_id") or trajectory["agent_id"]),
+                    request_id=f"trajectory-event:{saved['event_id']}:{correction_id}",
+                    details={"trajectory_sequence": sequence},
+                )
         if event_type in {"task_completed", "task_failed"}:
             trajectory["completed_at"] = event["timestamp"]
             trajectory["outcome"] = "success" if event_type == "task_completed" else "failed"
@@ -256,8 +278,13 @@ class OmniHarnessService:
         if not instruction.strip() or not evidence_trajectory_ids:
             raise ValueError("correction instruction and evidence are required")
         for trajectory_id in evidence_trajectory_ids:
-            if self.database.get_omni_record(trajectory_id, OmniRecordType.TRAJECTORY.value) is None:
+            evidence = self.database.get_omni_record(
+                trajectory_id, OmniRecordType.TRAJECTORY.value,
+            )
+            if evidence is None:
                 raise ValueError(f"evidence trajectory not found: {trajectory_id}")
+            if evidence["project_id"] != project_id or evidence["repository"] != repository:
+                raise ValueError("evidence trajectory is outside the correction scope")
         timestamp = _now()
         record = ExperienceCorrection(
             correction_id=f"corr_{uuid4().hex}", project_id=project_id,
@@ -272,6 +299,18 @@ class OmniHarnessService:
             provenance=redact(provenance or {"extractor": "deterministic-v1"}),
         ).to_dict()
         self._put_correction(record)
+        actor = str(record["approved_by"] or record["provenance"].get("client_id") or
+                    record["provenance"].get("extractor") or "system")
+        self._append_correction_event(
+            correction_id=record["correction_id"], event_type="proposed", actor=actor,
+            details={"evidence_trajectory_ids": evidence_trajectory_ids},
+        )
+        if deterministic_demo:
+            self._append_correction_event(
+                correction_id=record["correction_id"], event_type="approved",
+                actor=record["approved_by"] or "demo-approver",
+                details={"deterministic_demo": True},
+            )
         return record
 
     def extract_correction(self, failed_trajectory_id: str, *,
@@ -319,7 +358,114 @@ class OmniHarnessService:
             raise ValueError("only pending corrections may be approved")
         record["status"], record["approved_by"], record["updated_at"] = "active", approved_by, _now()
         self._put_correction(record)
+        self._append_correction_event(
+            correction_id=correction_id, event_type="approved", actor=approved_by,
+            details={"previous_status": "pending_review", "new_status": "active"},
+        )
         return record
+
+    def _append_correction_event(
+        self, *, correction_id: str, event_type: str, actor: str,
+        trajectory_id: str | None = None, outcome: str | None = None,
+        evidence_event_id: str | None = None, request_id: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        validate_correction_event_type(event_type)
+        event = {
+            "event_id": f"correction_event_{uuid4().hex}",
+            "correction_id": correction_id,
+            "trajectory_id": trajectory_id,
+            "event_type": event_type,
+            "outcome": outcome,
+            "evidence_event_id": evidence_event_id,
+            "actor": actor.strip() or "system",
+            "request_id": request_id,
+            "details": redact(details or {}),
+            "created_at": _now(),
+        }
+        saved, _ = self.database.add_omni_correction_event(event)
+        return saved
+
+    def list_correction_events(self, correction_id: str) -> list[dict[str, Any]]:
+        correction = self.database.get_omni_record(
+            correction_id, OmniRecordType.CORRECTION.value,
+        )
+        if correction is None:
+            raise ValueError("correction not found")
+        return self.database.list_omni_correction_events(correction_id)
+
+    def record_correction_outcome(
+        self, correction_id: str, *, trajectory_id: str, outcome: str,
+        evidence_event_id: str, actor: str, request_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        outcome = validate_correction_outcome(outcome)
+        if not actor.strip() or not request_id.strip() or not evidence_event_id.strip():
+            raise ValueError("actor, request_id, and evidence_event_id are required")
+        prior = next((
+            event for event in self.database.list_omni_correction_events(correction_id)
+            if event.get("request_id") == request_id
+        ), None)
+        if prior is not None:
+            correction = self.database.get_omni_record(
+                correction_id, OmniRecordType.CORRECTION.value,
+            )
+            return {"correction": correction, "event": prior, "created": False}
+        correction = self.database.get_omni_record(
+            correction_id, OmniRecordType.CORRECTION.value,
+        )
+        if correction is None:
+            raise ValueError("correction not found")
+        if correction["status"] != "active":
+            raise ValueError("only active corrections may record outcomes")
+        trajectory = self.get_trajectory(trajectory_id)
+        if trajectory is None:
+            raise ValueError("trajectory not found")
+        if (trajectory["project_id"] != correction["project_id"] or
+                trajectory["repository"] != correction["repository"]):
+            raise ValueError("trajectory is outside the correction scope")
+        events = trajectory["events"]
+        applied = any(
+            event["event_type"] == "correction_applied" and
+            correction_id in event.get("correction_ids", [])
+            for event in events
+        )
+        if not applied:
+            raise ValueError("trajectory did not apply this correction")
+        evidence = next((event for event in events if event["event_id"] == evidence_event_id), None)
+        if evidence is None:
+            raise ValueError("outcome evidence event is not part of the trajectory")
+        if outcome == "succeeded" and evidence["event_type"] != "task_completed":
+            raise ValueError("successful correction outcome requires task_completed evidence")
+        if outcome == "failed" and evidence["event_type"] != "task_failed":
+            raise ValueError("failed correction outcome requires task_failed evidence")
+        correction = dict(correction)
+        correction["use_count"] = int(correction.get("use_count", 0)) + 1
+        if outcome == "succeeded":
+            correction["success_count"] = int(correction.get("success_count", 0)) + 1
+            correction["successful_trajectory_ids"] = sorted(set(
+                correction.get("successful_trajectory_ids", []) + [trajectory_id]
+            ))
+        elif outcome == "failed":
+            correction["failure_count"] = int(correction.get("failure_count", 0)) + 1
+        correction["updated_at"] = _now()
+        event = {
+            "event_id": f"correction_event_{uuid4().hex}",
+            "correction_id": correction_id,
+            "trajectory_id": trajectory_id,
+            "event_type": outcome,
+            "outcome": outcome,
+            "evidence_event_id": evidence_event_id,
+            "actor": actor.strip(),
+            "request_id": request_id.strip(),
+            "details": redact(details or {}),
+            "created_at": correction["updated_at"],
+        }
+        saved, created = self.database.record_omni_correction_outcome(correction, event)
+        current = self.database.get_omni_record(
+            correction_id, OmniRecordType.CORRECTION.value,
+        )
+        return {"correction": current, "event": saved, "created": created}
 
     def search_corrections(self, *, project_id: str, task_type: str,
                            behavior_ids: list[str] | None = None,

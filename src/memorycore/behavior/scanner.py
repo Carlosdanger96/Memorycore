@@ -44,6 +44,35 @@ class _Finding:
     dependencies: list[str]
 
 
+@dataclass(slots=True)
+class _IgnoreRule:
+    base: str
+    pattern: str
+    negated: bool
+    directory_only: bool
+    anchored: bool
+
+    def matches(self, relative: str) -> bool:
+        if self.base:
+            if relative != self.base and not relative.startswith(self.base + "/"):
+                return False
+            candidate = relative[len(self.base):].lstrip("/")
+        else:
+            candidate = relative
+        if not candidate:
+            return False
+        pattern = self.pattern.lstrip("/")
+        parts = candidate.split("/")
+        if self.directory_only:
+            prefixes = ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
+            if "/" in pattern or self.anchored:
+                return any(fnmatch(prefix, pattern) for prefix in prefixes)
+            return any(fnmatch(part, pattern) for part in parts[:-1])
+        if "/" in pattern or self.anchored:
+            return fnmatch(candidate, pattern)
+        return any(fnmatch(part, pattern) for part in parts)
+
+
 class RepositoryScanner:
     """Deterministic, read-only scanner. It parses text and never imports target code."""
 
@@ -101,13 +130,59 @@ class RepositoryScanner:
         return self._merge(records)
 
     def _files(self, root: Path) -> Iterable[Path]:
+        ignore_rules = self._ignore_rules(root)
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or any(part in _SKIP_DIRECTORIES for part in path.relative_to(root).parts):
+            relative_path = path.relative_to(root)
+            if (not path.is_file() or path.is_symlink() or
+                    any(part in _SKIP_DIRECTORIES for part in relative_path.parts)):
+                continue
+            try:
+                if not path.resolve().is_relative_to(root):
+                    continue
+            except OSError:
+                continue
+            relative = relative_path.as_posix()
+            ignored = False
+            for rule in ignore_rules:
+                if rule.matches(relative):
+                    ignored = not rule.negated
+            if ignored:
                 continue
             if path.stat().st_size > 1_000_000 or self._is_secret(path.name):
                 continue
             if path.suffix in {".py", ".ts", ".tsx"} or path.suffix in _CONFIG_SUFFIXES or path.name.endswith(".env.example"):
                 yield path
+
+    @staticmethod
+    def _ignore_rules(root: Path) -> list[_IgnoreRule]:
+        files = []
+        for path in root.rglob(".gitignore"):
+            relative = path.relative_to(root)
+            if (path.is_file() and not path.is_symlink() and
+                    not any(part in _SKIP_DIRECTORIES for part in relative.parts)):
+                files.append(path)
+        rules: list[_IgnoreRule] = []
+        for path in sorted(files, key=lambda item: (len(item.relative_to(root).parts), item.as_posix())):
+            base = path.parent.relative_to(root).as_posix()
+            if base == ".":
+                base = ""
+            for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.rstrip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(r"\#"):
+                    line = line[1:]
+                negated = line.startswith("!")
+                if negated:
+                    line = line[1:]
+                elif line.startswith(r"\!"):
+                    line = line[1:]
+                directory_only = line.endswith("/")
+                anchored = line.startswith("/")
+                pattern = line.strip("/")
+                if pattern:
+                    rules.append(_IgnoreRule(base, pattern, negated, directory_only, anchored))
+        return rules
 
     @staticmethod
     def _python_findings(path: Path, relative: str) -> list[_Finding]:
@@ -173,6 +248,8 @@ class RepositoryScanner:
     @staticmethod
     def _is_secret(name: str) -> bool:
         lower = name.lower()
+        if lower in {".env.example", ".env.sample", ".env.template"}:
+            return False
         return any(fnmatch(lower, pattern) for pattern in _SECRET_PATTERNS)
 
     @staticmethod

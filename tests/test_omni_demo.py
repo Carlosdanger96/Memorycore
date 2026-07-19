@@ -14,6 +14,10 @@ def test_full_failed_to_corrected_demo_persists_across_restart(tmp_path):
     successful = reopened.omni.get_trajectory(report["successful_trajectory_id"])
     assert successful["outcome"] == "success"
     assert any(item["event_type"] == "verification_run" for item in successful["events"])
+    correction = reopened.database.get_omni_record(report["correction_id"], "correction")
+    assert correction["use_count"] == 1 and correction["success_count"] == 1
+    events = reopened.omni.list_correction_events(report["correction_id"])
+    assert any(item["event_type"] == "succeeded" for item in events)
     backup = tmp_path / "omni-backup.db"
     reopened.backup(backup)
     reopened.close()

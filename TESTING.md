@@ -35,6 +35,10 @@ python -m pip install -e ".[mcp-test]"
 
 The demo creates an isolated temporary database and synthetic vault. It never
 opens or overwrites the user's real Memorycore database or Obsidian vault.
+On a clean checkout, the scripts create `.demo-venv`, install `.[mcp-test]`,
+run the complete deterministic scenario, run the focused Omni test set, and
+print exact REST and MCP startup commands. Set `MEMORYCORE_DEMO_PYTHON` to use
+an already prepared interpreter in CI or controlled development environments.
 
 ## Test commands
 
@@ -47,10 +51,16 @@ python scripts/verify_demo.py
 Expected implementation-session result:
 
 ```text
-35 passed
+40 passed
 ```
 
 Exact timing varies by machine.
+
+Latest focused Omni verification:
+
+```text
+17 passed
+```
 
 ## Live GPT-5.6 mode
 

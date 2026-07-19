@@ -32,3 +32,34 @@ def test_scanner_rejects_paths_outside_allowlist(tmp_path):
     allowed.mkdir(); outside.mkdir()
     with pytest.raises(ScanSecurityError):
         RepositoryScanner([allowed]).scan(outside, project_id="p")
+
+
+def test_scanner_honors_nested_ignore_negation_and_skips_symlinks(tmp_path):
+    repo = tmp_path / "agent"
+    repo.mkdir()
+    (repo / ".gitignore").write_text(
+        "ignored/\n*.generated.py\n!keep.generated.py\n", encoding="utf-8",
+    )
+    ignored = repo / "ignored"
+    ignored.mkdir()
+    (ignored / "hidden.py").write_text("def hidden_behavior():\n    pass\n", encoding="utf-8")
+    (repo / "drop.generated.py").write_text("def dropped_behavior():\n    pass\n", encoding="utf-8")
+    (repo / "keep.generated.py").write_text("def kept_behavior():\n    pass\n", encoding="utf-8")
+    nested = repo / "nested"
+    nested.mkdir()
+    (nested / ".gitignore").write_text("skip.py\n", encoding="utf-8")
+    (nested / "skip.py").write_text("def nested_hidden():\n    pass\n", encoding="utf-8")
+    outside = tmp_path / "outside.py"
+    outside.write_text("def escaped_behavior():\n    pass\n", encoding="utf-8")
+    try:
+        (repo / "linked.py").symlink_to(outside)
+    except OSError:
+        pass
+
+    records = RepositoryScanner([tmp_path]).scan(repo, project_id="p")
+    ids = {record.behavior_id for record in records}
+    assert "repository.behavior.kept_behavior" in ids
+    assert "repository.behavior.hidden_behavior" not in ids
+    assert "repository.behavior.dropped_behavior" not in ids
+    assert "repository.behavior.nested_hidden" not in ids
+    assert "repository.behavior.escaped_behavior" not in ids

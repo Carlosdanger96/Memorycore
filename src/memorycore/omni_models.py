@@ -21,6 +21,23 @@ class CorrectionOperation(StrEnum):
     ESCALATE_APPROVAL = "escalate_approval"
 
 
+class CorrectionEventType(StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    APPLIED = "applied"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    PARTIAL = "partial"
+    REJECTED = "rejected"
+    SUPERSEDED = "superseded"
+
+
+class CorrectionOutcome(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    PARTIAL = "partial"
+
+
 class AuditFindingType(StrEnum):
     DUPLICATE = "duplicate"
     CONTRADICTION = "contradiction"
@@ -183,6 +200,20 @@ def validate_correction_operation(value: str) -> str:
         return CorrectionOperation(value).value
     except ValueError as exc:
         raise ValueError("unsupported correction operation") from exc
+
+
+def validate_correction_event_type(value: str) -> str:
+    try:
+        return CorrectionEventType(value).value
+    except ValueError as exc:
+        raise ValueError("unsupported correction event type") from exc
+
+
+def validate_correction_outcome(value: str) -> str:
+    try:
+        return CorrectionOutcome(value).value
+    except ValueError as exc:
+        raise ValueError("unsupported correction outcome") from exc
 
 
 def validate_event_type(value: str) -> str:

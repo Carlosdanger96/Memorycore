@@ -71,6 +71,23 @@ class ObsidianProjection:
                 f"- [[../../Trajectories/{self._safe(item)}|{item}]]"
                 for item in record["evidence_trajectory_ids"]
             ) + "\n"
+            successful = record.get("successful_trajectory_ids", [])
+            body += "\n## Successful reuse\n\n" + ("\n".join(
+                f"- [[../../Trajectories/{self._safe(item)}|{item}]]"
+                for item in successful
+            ) or "- None") + "\n"
+            body += (
+                f"\n## Reuse metrics\n\n- Uses: **{record.get('use_count', 0)}**"
+                f"\n- Successes: **{record.get('success_count', 0)}**"
+                f"\n- Failures: **{record.get('failure_count', 0)}**\n"
+            )
+            events = self.database.list_omni_correction_events(record["correction_id"])
+            body += "\n## Immutable lifecycle\n\n" + ("\n".join(
+                f"- `{item['event_type']}` — `{item['created_at']}` — actor: `{item.get('actor') or 'system'}`"
+                + (f" — [[../../Trajectories/{self._safe(item['trajectory_id'])}|trajectory]]"
+                   if item.get("trajectory_id") else "")
+                for item in events
+            ) or "- None") + "\n"
             self._write(path, body, written, unchanged)
         for record in findings:
             path = root / "Conflicts" / f"{self._safe(record['finding_id'])}.md"
@@ -105,6 +122,9 @@ class ObsidianProjection:
         outcomes = Counter(item["outcome"] for item in trajectories)
         statuses = Counter(item["status"] for item in corrections)
         open_conflicts = sum(1 for item in findings if item["status"] == "pending_review")
+        correction_uses = sum(int(item.get("use_count", 0)) for item in corrections)
+        correction_successes = sum(int(item.get("success_count", 0)) for item in corrections)
+        reuse_rate = (correction_successes / correction_uses) if correction_uses else 0.0
         generated_at = max(
             [item.get("updated_at") or item.get("created_at") or item.get("started_at") or ""
              for item in behaviors + trajectories + corrections + findings] or ["1970-01-01T00:00:00+00:00"]
@@ -116,6 +136,7 @@ class ObsidianProjection:
         body += f"- Behaviors: **{len(behaviors)}**\n- Successful trajectories: **{outcomes['success']}**\n"
         body += f"- Failed trajectories: **{outcomes['failed']}**\n- Pending corrections: **{statuses['pending_review']}**\n"
         body += f"- Active corrections: **{statuses['active']}**\n- Open conflicts: **{open_conflicts}**\n"
+        body += f"- Correction reuse success: **{correction_successes}/{correction_uses} ({reuse_rate:.0%})**\n"
         body += "\n## Trajectories\n\n" + ("\n".join(
             f"- [[Trajectories/{self._safe(item['trajectory_id'])}|{item['task_description']}]] — {item['outcome']}"
             for item in trajectories[:10]
