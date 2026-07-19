@@ -62,6 +62,9 @@ Latest focused Omni verification:
 17 passed
 ```
 
+Hosted workflow run `29700494661` passed all six jobs: Python 3.11, 3.12, and
+3.13; offline demo; security and migration; and Windows PowerShell smoke.
+
 ## Live GPT-5.6 mode
 
 The offline provider remains the default. To request live structured extraction

@@ -142,8 +142,8 @@ Use these labels in implementation notes and pull-request descriptions:
 | 8 | Memory auditing | `DONE` | Provider payload minimization and redaction tested |
 | 9 | MCP and REST | `DONE` | Outcome endpoint/tool and schema parity implemented |
 | 10 | Obsidian | `DONE` | Reuse metric and successful-run links implemented |
-| 11 | Demo | `HARDEN` | Clean setup passes on Linux; actual Windows run pending |
-| 12 | CI/security | `HARDEN` | Workflow implemented; hosted runs pending |
+| 11 | Demo | `DONE` | Clean Linux and hosted Windows paths passed |
+| 12 | CI/security | `DONE` | All six hosted jobs passed in run `29700494661` |
 | 13 | Evidence/PR | `TODO` | Remote evidence, feedback ID, and draft PR |
 
 ## 5. Ordered implementation plan
@@ -610,7 +610,7 @@ resolve inside the generated tree.
 
 ### Step 11 — Run the isolated synthetic demonstration
 
-**Status:** scenario and clean-checkout setup are `DONE`; an actual Windows run is `TODO`.
+**Status:** `DONE`; scenario, clean setup, Linux execution, and hosted Windows execution passed.
 
 **Objective:** prove the product loop without external accounts or production data.
 
@@ -652,7 +652,7 @@ key and no preinstalled editable package.
 
 ### Step 12 — Add CI and security regression checks
 
-**Status:** workflow implementation is `DONE`; hosted Linux/Windows execution is `TODO`.
+**Status:** `DONE`; all six jobs passed in hosted workflow run `29700494661`.
 
 **Objective:** make the proof repeatable by reviewers rather than dependent on one
 developer machine.
@@ -775,7 +775,7 @@ tasks:
 
   - id: T5
     title: Clean-checkout demo setup
-    status: completed_on_linux_windows_run_pending
+    status: completed
     depends_on: [T1, T2]
     touches:
       - scripts/demo.sh
@@ -788,7 +788,7 @@ tasks:
 
   - id: T6
     title: CI and release evidence
-    status: implementation_complete_remote_verification_pending
+    status: ci_complete_manual_release_evidence_pending
     depends_on: [T3, T4, T5]
     touches:
       - .github/workflows/omni-harness.yml

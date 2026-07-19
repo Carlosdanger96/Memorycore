@@ -53,7 +53,8 @@
 - Projection idempotency: second generation performs zero writes.
 - Evidence export: passed with test and demo exit codes 0.
 - Linux one-command entrypoint: passed with focused tests and startup commands.
-- Windows workflow and PowerShell entrypoint: implemented; actual hosted Windows run remains pending.
+- Hosted CI run `29700494661`: all six jobs passed, including Python 3.11–3.13,
+  offline demo, security/migration, and the Windows PowerShell smoke test.
 - Optional live GPT-5.6 request: reached OpenAI but the selected Default project returned HTTP 403 because that project lacks access to `gpt-5.6`.
 
 Commit identifiers will be supplied by the actual Git history. This document

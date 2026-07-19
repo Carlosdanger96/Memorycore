@@ -48,7 +48,9 @@ separate approver action before canonical state changes.
 - Focused Omni suite: 17 passed.
 - Offline demo: passed with one verified correction use and one success.
 - Evidence export: test and demo exit codes 0.
-- Actual Windows CI run, remote baseline tag, screenshots, and `/feedback` ID remain manual evidence tasks.
+- Hosted Windows, Linux, Python 3.11–3.13, demo, security, and migration CI passed
+  in workflow run `29700494661`.
+- The remote baseline tag, screenshots, and `/feedback` ID remain manual evidence tasks.
 
 ## Codex feedback evidence
 
