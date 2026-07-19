@@ -23,6 +23,15 @@ def test_database_health(tmp_path):
     database.initialize()
     health = database.health()
     assert health["ok"] is True and health["fts5"] is True
+    versions = [
+        row[0] for row in database.connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    ]
+    assert versions == [1, 2, 3, 4]
+    assert database.connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='omni_correction_events'"
+    ).fetchone() is not None
     database.close()
 
 

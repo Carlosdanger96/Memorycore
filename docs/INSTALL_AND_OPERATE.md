@@ -5,7 +5,7 @@
 Requirements: Python 3.11+ and Git. SQLite is included with Python.
 
 ```powershell
-git clone https://github.com/Carlosdanger96/Memorycore.git
+git clone --branch hackathon/omni-memory-harness --single-branch https://github.com/Carlosdanger96/Memorycore.git
 cd Memorycore
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\setup-windows.ps1

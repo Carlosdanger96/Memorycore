@@ -13,6 +13,7 @@ from .models import (
     validate_source_type, validate_status, validate_status_transition,
 )
 from .retrieval import build_fts_query, rank_memories, render_context
+from .omni_service import OmniHarnessService
 
 
 def _now() -> str:
@@ -20,10 +21,13 @@ def _now() -> str:
 
 
 class MemoryService:
-    def __init__(self, database_path: str | Path) -> None:
+    def __init__(self, database_path: str | Path,
+                 *, scanner_roots: list[str | Path] | None = None,
+                 vault_roots: list[str | Path] | None = None) -> None:
         database_target = str(database_path)
         self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgres://")) else SQLiteDatabase(database_path)
         self.database.initialize()
+        self.omni = OmniHarnessService(self, scanner_roots, vault_roots) if isinstance(self.database, SQLiteDatabase) else None
 
     def close(self) -> None:
         self.database.close()

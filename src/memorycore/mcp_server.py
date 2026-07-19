@@ -108,6 +108,12 @@ class MemoryMCPAdapter:
             model_name=identity.model_name,
         )
 
+    @property
+    def omni(self):
+        if self.service.omni is None:
+            raise RuntimeError("Omni Memory Harness is unavailable for this storage adapter")
+        return self.service.omni
+
     async def memory_add(self, project_id: str, memory_type: str, content: str,
                          summary: str | None = None, tags: list[str] | None = None,
                          metadata: dict[str, Any] | None = None,
@@ -212,6 +218,176 @@ class MemoryMCPAdapter:
             self.policy.check_project(memory.project_id)
         return self.service.get_memory_history(memory_id, limit)
 
+    async def omni_health(self) -> dict[str, Any]:
+        return self.omni.health()
+
+    async def omni_search_memories(self, query: str, project_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        return await self.memory_search(query=query, project_id=project_id, limit=limit)
+
+    async def omni_get_memory(self, memory_id: str) -> dict[str, Any] | None:
+        return await self.memory_get(memory_id)
+
+    async def omni_retrieve_context(self, query: str, project_id: str, limit: int = 10) -> dict[str, Any]:
+        return await self.memory_retrieve_context(query=query, project_id=project_id, limit=limit)
+
+    async def omni_scan_repository(self, repository_path: str, project_id: str,
+                                   repository: str | None = None) -> list[dict[str, Any]]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
+        return self.omni.scan_repository(repository_path, project_id=project_id, repository=repository)
+
+    async def omni_search_behaviors(self, project_id: str, query: str = "",
+                                    repository: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        self.policy.check_project(project_id)
+        return self.omni.search_behaviors(project_id=project_id, query=query,
+                                          repository=repository, limit=limit)
+
+    async def omni_get_behavior(self, behavior_id: str, project_id: str) -> dict[str, Any] | None:
+        self.policy.check_project(project_id)
+        return self.omni.get_behavior(behavior_id, project_id=project_id)
+
+    async def omni_get_behavior_impact(self, behavior_id: str, project_id: str) -> dict[str, Any] | None:
+        self.policy.check_project(project_id)
+        return self.omni.behavior_impact(behavior_id, project_id=project_id)
+
+    async def omni_create_trajectory(self, project_id: str, task_type: str,
+                                     task_description: str, agent_id: str,
+                                     repository: str, source_revision: str) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
+        return self.omni.create_trajectory(
+            project_id=project_id, task_type=task_type,
+            task_description=task_description, agent_id=agent_id,
+            repository=repository, source_revision=source_revision,
+            provenance={"client_id": self.policy.client_id,
+                        "model_provider": self.policy.model_provider,
+                        "model_name": self.policy.model_name},
+        )
+
+    async def omni_record_trajectory_event(self, trajectory_id: str, event_type: str,
+                                           sequence: int, request_id: str | None = None,
+                                           behavior_ids: list[str] | None = None,
+                                           memory_ids: list[str] | None = None,
+                                           correction_ids: list[str] | None = None,
+                                           tool_name: str | None = None,
+                                           input_data: Any = None, output_data: Any = None,
+                                           error_signature: str | None = None,
+                                           outcome: str | None = None) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        trajectory = self.omni.get_trajectory(trajectory_id)
+        if trajectory is None:
+            raise ValueError("trajectory not found")
+        self.policy.check_project(trajectory["project_id"])
+        return self.omni.append_trajectory_event(
+            trajectory_id, event_type=event_type, sequence=sequence,
+            request_id=request_id, behavior_ids=behavior_ids, memory_ids=memory_ids,
+            correction_ids=correction_ids, tool_name=tool_name,
+            input_data=input_data, output_data=output_data,
+            error_signature_value=error_signature, outcome=outcome,
+            metadata={"client_id": self.policy.client_id},
+        )
+
+    async def omni_get_trajectory(self, trajectory_id: str) -> dict[str, Any] | None:
+        trajectory = self.omni.get_trajectory(trajectory_id)
+        if trajectory is not None:
+            self.policy.check_project(trajectory["project_id"])
+        return trajectory
+
+    async def omni_propose_correction(self, project_id: str, task_type: str,
+                                      behavior_ids: list[str], repository: str,
+                                      operation: str, instruction: str,
+                                      evidence_trajectory_ids: list[str],
+                                      error_signature: str | None = None,
+                                      trigger: dict[str, Any] | None = None,
+                                      confidence: float = 0.7) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
+        return self.omni.propose_correction(
+            project_id=project_id, task_type=task_type, behavior_ids=behavior_ids,
+            repository=repository, operation=operation, instruction=instruction,
+            evidence_trajectory_ids=evidence_trajectory_ids,
+            error_signature_value=error_signature, trigger=trigger, confidence=confidence,
+            provenance={"client_id": self.policy.client_id,
+                        "model_provider": self.policy.model_provider,
+                        "model_name": self.policy.model_name,
+                        "prompt_version": "omni-correction-v1"},
+        )
+
+    async def omni_extract_correction(self, failed_trajectory_id: str,
+                                      successful_trajectory_id: str | None = None) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        trajectory = self.omni.get_trajectory(failed_trajectory_id)
+        if trajectory is None:
+            raise ValueError("failed trajectory not found")
+        self.policy.check_project(trajectory["project_id"])
+        return self.omni.extract_correction(
+            failed_trajectory_id, successful_trajectory_id=successful_trajectory_id,
+        )
+
+    async def omni_approve_correction(self, correction_id: str) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        record = self.service.database.get_omni_record(correction_id, "correction")
+        if record is not None:
+            self.policy.check_project(record["project_id"])
+        return self.omni.approve_correction(correction_id, approved_by=self.policy.client_id)
+
+    async def omni_search_corrections(self, project_id: str, task_type: str,
+                                      behavior_ids: list[str] | None = None,
+                                      repository: str | None = None,
+                                      error_signature: str | None = None,
+                                      tool_name: str | None = None,
+                                      limit: int = 10) -> list[dict[str, Any]]:
+        self.policy.check_project(project_id)
+        return self.omni.search_corrections(
+            project_id=project_id, task_type=task_type, behavior_ids=behavior_ids,
+            repository=repository, error_signature_value=error_signature,
+            tool_name=tool_name, limit=limit,
+        )
+
+    async def omni_record_correction_outcome(
+        self, correction_id: str, trajectory_id: str, outcome: str,
+        evidence_event_id: str, request_id: str,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        record = self.service.database.get_omni_record(correction_id, "correction")
+        if record is None:
+            raise ValueError("correction not found")
+        self.policy.check_project(record["project_id"])
+        return self.omni.record_correction_outcome(
+            correction_id, trajectory_id=trajectory_id, outcome=outcome,
+            evidence_event_id=evidence_event_id, actor=self.policy.client_id,
+            request_id=request_id, details=details,
+        )
+
+    async def omni_build_context_pack(self, project_id: str, query: str,
+                                      task_type: str, behavior_ids: list[str] | None = None,
+                                      repository: str | None = None,
+                                      limit: int = 10) -> dict[str, Any]:
+        self.policy.check_project(project_id)
+        return self.omni.build_context_pack(
+            project_id=project_id, query=query, task_type=task_type,
+            behavior_ids=behavior_ids, repository=repository, limit=limit,
+        )
+
+    async def omni_audit_memories(self, project_id: str) -> list[dict[str, Any]]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
+        model = self.policy.model_name or "deterministic-auditor-v1"
+        return self.omni.audit_memories(project_id=project_id, model=model)
+
+    async def omni_approve_revision(self, finding_id: str) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        record = self.service.database.get_omni_record(finding_id, "audit_finding")
+        if record is not None:
+            self.policy.check_project(record["project_id"])
+        return self.omni.approve_revision(finding_id, approved_by=self.policy.client_id)
+
+    async def omni_project_obsidian(self, project_id: str, vault_root: str) -> dict[str, Any]:
+        self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
+        self.policy.check_project(project_id)
+        return self.omni.project_obsidian(vault_root, project_id=project_id)
+
     async def memory_health(self) -> dict[str, Any]:
         return self.service.health()
 
@@ -246,6 +422,26 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     server.tool(name="memory_archive")(adapter.memory_archive)
     server.tool(name="memory_history")(adapter.memory_history)
     server.tool(name="memory_health")(adapter.memory_health)
+    server.tool(name="omni_health")(adapter.omni_health)
+    server.tool(name="omni_search_memories")(adapter.omni_search_memories)
+    server.tool(name="omni_get_memory")(adapter.omni_get_memory)
+    server.tool(name="omni_retrieve_context")(adapter.omni_retrieve_context)
+    server.tool(name="omni_scan_repository")(adapter.omni_scan_repository)
+    server.tool(name="omni_search_behaviors")(adapter.omni_search_behaviors)
+    server.tool(name="omni_get_behavior")(adapter.omni_get_behavior)
+    server.tool(name="omni_get_behavior_impact")(adapter.omni_get_behavior_impact)
+    server.tool(name="omni_create_trajectory")(adapter.omni_create_trajectory)
+    server.tool(name="omni_record_trajectory_event")(adapter.omni_record_trajectory_event)
+    server.tool(name="omni_get_trajectory")(adapter.omni_get_trajectory)
+    server.tool(name="omni_propose_correction")(adapter.omni_propose_correction)
+    server.tool(name="omni_extract_correction")(adapter.omni_extract_correction)
+    server.tool(name="omni_approve_correction")(adapter.omni_approve_correction)
+    server.tool(name="omni_search_corrections")(adapter.omni_search_corrections)
+    server.tool(name="omni_record_correction_outcome")(adapter.omni_record_correction_outcome)
+    server.tool(name="omni_build_context_pack")(adapter.omni_build_context_pack)
+    server.tool(name="omni_audit_memories")(adapter.omni_audit_memories)
+    server.tool(name="omni_approve_revision")(adapter.omni_approve_revision)
+    server.tool(name="omni_project_obsidian")(adapter.omni_project_obsidian)
     return server
 
 
