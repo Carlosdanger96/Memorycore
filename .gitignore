@@ -13,3 +13,4 @@ http-clients.json
 *.sqlite
 dist/
 build/
+evidence/

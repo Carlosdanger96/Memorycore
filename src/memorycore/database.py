@@ -101,6 +101,57 @@ CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
     INSERT INTO memory_fts(id, content, summary, tags)
     VALUES (new.id, new.content, COALESCE(new.summary, ''), new.tags);
 END;
+
+CREATE TABLE IF NOT EXISTS omni_records (
+    record_id TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL CHECK (
+        record_type IN ('behavior','trajectory','correction','audit_finding')
+    ),
+    project_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    repository TEXT,
+    source_revision TEXT,
+    task_type TEXT,
+    error_signature TEXT,
+    behavior_ids TEXT NOT NULL DEFAULT '[]',
+    confidence REAL,
+    record_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_omni_records_lookup
+ON omni_records(record_type, project_id, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_omni_records_correction_match
+ON omni_records(record_type, project_id, repository, task_type, error_signature);
+
+CREATE TABLE IF NOT EXISTS omni_trajectory_events (
+    event_id TEXT PRIMARY KEY,
+    trajectory_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+    request_id TEXT,
+    event_type TEXT NOT NULL,
+    event_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(trajectory_id, sequence),
+    UNIQUE(trajectory_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_omni_events_trajectory
+ON omni_trajectory_events(trajectory_id, sequence);
+
+CREATE TABLE IF NOT EXISTS omni_revision_events (
+    event_id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    reviewer TEXT,
+    details TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_omni_revision_finding
+ON omni_revision_events(finding_id, created_at);
 """
 
 
@@ -121,7 +172,54 @@ class SQLiteDatabase:
             self.connection.commit()
 
     def _apply_migrations(self) -> None:
-        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';")]
+        migrations = [
+            (1, "initial_storage", "embedded-v1"),
+            (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';"),
+            (3, "omni_memory_harness", """
+                CREATE TABLE IF NOT EXISTS omni_records (
+                    record_id TEXT PRIMARY KEY,
+                    record_type TEXT NOT NULL CHECK (record_type IN ('behavior','trajectory','correction','audit_finding')),
+                    project_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    repository TEXT,
+                    source_revision TEXT,
+                    task_type TEXT,
+                    error_signature TEXT,
+                    behavior_ids TEXT NOT NULL DEFAULT '[]',
+                    confidence REAL,
+                    record_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_omni_records_lookup
+                ON omni_records(record_type, project_id, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_omni_records_correction_match
+                ON omni_records(record_type, project_id, repository, task_type, error_signature);
+                CREATE TABLE IF NOT EXISTS omni_trajectory_events (
+                    event_id TEXT PRIMARY KEY,
+                    trajectory_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK (sequence >= 1),
+                    request_id TEXT,
+                    event_type TEXT NOT NULL,
+                    event_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(trajectory_id, sequence),
+                    UNIQUE(trajectory_id, request_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_omni_events_trajectory
+                ON omni_trajectory_events(trajectory_id, sequence);
+                CREATE TABLE IF NOT EXISTS omni_revision_events (
+                    event_id TEXT PRIMARY KEY,
+                    finding_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    reviewer TEXT,
+                    details TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_omni_revision_finding
+                ON omni_revision_events(finding_id, created_at);
+            """),
+        ]
         applied = {row[0]: row[1] for row in self.connection.execute("SELECT version, checksum FROM schema_migrations")}
         for version, name, sql in migrations:
             checksum = sql if version == 1 else hashlib.sha256(sql.encode()).hexdigest()
@@ -374,6 +472,123 @@ class SQLiteDatabase:
         with self._lock:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
+
+    def put_omni_record(self, record_type: str, record_id: str, record: dict[str, Any],
+                        *, project_id: str, status: str, repository: str | None = None,
+                        source_revision: str | None = None, task_type: str | None = None,
+                        error_signature: str | None = None,
+                        behavior_ids: list[str] | None = None,
+                        confidence: float | None = None) -> dict[str, Any]:
+        created_at = str(record.get("created_at") or record.get("started_at") or record.get("timestamp"))
+        updated_at = str(record.get("updated_at") or record.get("completed_at") or created_at)
+        payload = json.dumps(record, ensure_ascii=False, sort_keys=True)
+        with self._lock:
+            self.connection.execute(
+                """INSERT INTO omni_records (
+                    record_id, record_type, project_id, status, repository,
+                    source_revision, task_type, error_signature, behavior_ids,
+                    confidence, record_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(record_id) DO UPDATE SET
+                    status=excluded.status, repository=excluded.repository,
+                    source_revision=excluded.source_revision, task_type=excluded.task_type,
+                    error_signature=excluded.error_signature,
+                    behavior_ids=excluded.behavior_ids, confidence=excluded.confidence,
+                    record_json=excluded.record_json, updated_at=excluded.updated_at""",
+                (record_id, record_type, project_id, status, repository,
+                 source_revision, task_type, error_signature,
+                 json.dumps(behavior_ids or [], ensure_ascii=False), confidence,
+                 payload, created_at, updated_at),
+            )
+            self.connection.commit()
+        return record
+
+    def get_omni_record(self, record_id: str, record_type: str | None = None) -> dict[str, Any] | None:
+        query = "SELECT record_json FROM omni_records WHERE record_id = ?"
+        parameters: tuple[Any, ...] = (record_id,)
+        if record_type is not None:
+            query += " AND record_type = ?"
+            parameters = (record_id, record_type)
+        with self._lock:
+            row = self.connection.execute(query, parameters).fetchone()
+        return json.loads(row["record_json"]) if row else None
+
+    def list_omni_records(self, record_type: str, project_id: str,
+                          *, status: str | None = None,
+                          repository: str | None = None,
+                          limit: int = 100) -> list[dict[str, Any]]:
+        clauses = ["record_type = ?", "project_id = ?"]
+        parameters: list[Any] = [record_type, project_id]
+        if status is not None:
+            clauses.append("status = ?")
+            parameters.append(status)
+        if repository is not None:
+            clauses.append("repository = ?")
+            parameters.append(repository)
+        parameters.append(limit)
+        with self._lock:
+            rows = self.connection.execute(
+                f"SELECT record_json FROM omni_records WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT ?",
+                parameters,
+            ).fetchall()
+        return [json.loads(row["record_json"]) for row in rows]
+
+    def count_omni_records(self, record_type: str) -> int:
+        with self._lock:
+            row = self.connection.execute(
+                "SELECT COUNT(*) AS count FROM omni_records WHERE record_type=?",
+                (record_type,),
+            ).fetchone()
+        return int(row["count"])
+
+    def append_omni_event(self, event: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        with self._lock:
+            if event.get("request_id"):
+                row = self.connection.execute(
+                    "SELECT event_json FROM omni_trajectory_events WHERE trajectory_id=? AND request_id=?",
+                    (event["trajectory_id"], event["request_id"]),
+                ).fetchone()
+                if row:
+                    return json.loads(row["event_json"]), False
+            self.connection.execute(
+                """INSERT INTO omni_trajectory_events (
+                    event_id, trajectory_id, sequence, request_id, event_type,
+                    event_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (event["event_id"], event["trajectory_id"], event["sequence"],
+                 event.get("request_id"), event["event_type"],
+                 json.dumps(event, ensure_ascii=False, sort_keys=True), event["timestamp"]),
+            )
+            self.connection.commit()
+        return event, True
+
+    def list_omni_events(self, trajectory_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT event_json FROM omni_trajectory_events WHERE trajectory_id=? ORDER BY sequence",
+                (trajectory_id,),
+            ).fetchall()
+        return [json.loads(row["event_json"]) for row in rows]
+
+    def add_omni_revision_event(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            self.connection.execute(
+                """INSERT INTO omni_revision_events (
+                    event_id, finding_id, event_type, reviewer, details, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (event["event_id"], event["finding_id"], event["event_type"],
+                 event.get("reviewer"), json.dumps(event.get("details", {}), ensure_ascii=False),
+                 event["created_at"]),
+            )
+            self.connection.commit()
+
+    def list_omni_revision_events(self, finding_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                "SELECT * FROM omni_revision_events WHERE finding_id=? ORDER BY created_at",
+                (finding_id,),
+            ).fetchall()
+        return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
 
     def find_exact_active(self, project_id: str, memory_type: str, content: str) -> Memory | None:
         with self._lock:

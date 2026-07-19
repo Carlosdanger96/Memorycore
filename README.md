@@ -1,5 +1,7 @@
 # Memorycore
 
+**Omni Memory Harness helps AI agents remember not only facts, but how their behavior is implemented, what previously failed, why it failed, and which verified correction should be applied before trying again.**
+
 Memorycore is a shared memory system for multiple LLMs.
 
 Its one purpose is to let different LLMs store, retrieve, and share the same persistent memories through a common memory layer. Instead of every LLM maintaining a separate and isolated memory system, Memorycore provides one provider-neutral source of memory that can be used by ChatGPT, Mistral, Hermes, Gemini, Claude, Codex, local models, and other LLM systems.
@@ -39,6 +41,34 @@ SQLite (local prototype) → PostgreSQL (shared production)
 
 The current release includes SQLite storage, audit history, lifecycle controls,
 deterministic retrieval, backup/export/import, and a central MCP service mode.
+
+The hackathon branch adds the Omni Memory Harness vertical slice: read-only
+behavior-to-code scanning, append-only trajectories, reusable structured
+corrections, deterministic or optional GPT-5.6 auditing, approval-gated
+revisions, REST/MCP interfaces, and idempotent Obsidian projections. Memorycore
+remains canonical; generated Markdown never becomes storage authority.
+
+## Judge quick start
+
+No external account, API key, real vault, or production database is required:
+
+```bash
+./scripts/demo.sh
+```
+
+Windows PowerShell:
+
+```powershell
+.\scripts\demo.ps1
+```
+
+The command creates an isolated temporary database and vault, scans the
+synthetic agent, records a failed run, extracts and approves a correction,
+retrieves it before a successful rerun, audits contradictory memories, approves
+the revision, and generates Obsidian-compatible Markdown. It exits nonzero if
+any required proof fails.
+
+See [TESTING.md](TESTING.md) and [DEMO_SCRIPT.md](DEMO_SCRIPT.md).
 
 ## Status
 

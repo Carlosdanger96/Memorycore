@@ -92,6 +92,12 @@ class StaticTokenVerifier:
                 return identity
         raise TokenConfigurationError("authenticated client is not in the configured token registry")
 
+    def identity_for_token(self, token: str) -> HTTPClientIdentity | None:
+        for identity in self.identities:
+            if hmac.compare_digest(token, identity.token):
+                return identity
+        return None
+
     async def verify_token(self, token: str):
         # Import only when the optional MCP HTTP dependency is installed.
         from mcp.server.auth.provider import AccessToken

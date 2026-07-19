@@ -21,6 +21,8 @@ dev = ["memorycore[mcp-test,postgres]"]
 memorycore = "memorycore.cli:main"
 memorycore-mcp = "memorycore.mcp_server:main"
 memorycore-service = "memorycore.mcp_server:main"
+memorycore-api = "memorycore.api.omni_routes:main"
+memorycore-demo = "memorycore.demo.runner:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
