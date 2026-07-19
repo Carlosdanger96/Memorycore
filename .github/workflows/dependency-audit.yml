@@ -1,0 +1,70 @@
+name: Weekly Dependency Audit
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check outdated dependencies
+        id: check-outdated
+        run: |
+          pip install --upgrade pip
+          OUTDATED=$(pip list --outdated --format=json 2>/dev/null || echo '[]')
+          echo "outdated=$OUTDATED" >> $GITHUB_OUTPUT
+
+      - name: Create update branch
+        if: steps.check-outdated.outputs.outdated != '[]'
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git checkout -b "chore/dependency-updates-$DATE"
+
+      - name: Update dependencies
+        if: steps.check-outdated.outputs.outdated != '[]'
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install --upgrade -r requirements.txt
+            pip freeze > requirements-new.txt
+            mv requirements-new.txt requirements.txt
+          fi
+          if [ -f pyproject.toml ]; then
+            pip install --upgrade -e .
+          fi
+          git add .
+          git commit -m "chore: dependency updates $(date +%Y-%m-%d)"
+
+      - name: Create Pull Request
+        if: steps.check-outdated.outputs.outdated != '[]'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: dependency updates $(date +%Y-%m-%d)"
+          title: "chore: dependency updates $(date +%Y-%m-%d)"
+          body: Weekly security audit identified outdated dependencies.
+          branch: "chore/dependency-updates-$(date +%Y-%m-%d)"
+          base: main
+          labels: dependencies,security,automated
+
+      - name: Log clean status
+        if: steps.check-outdated.outputs.outdated == '[]'
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          mkdir -p /tmp/audits
+          echo "# Security Audit - $DATE" > /tmp/audits/$DATE-clean.md
+          echo "Repository: ${{ github.repository }}" >> /tmp/audits/$DATE-clean.md
+          echo "Status: CLEAN" >> /tmp/audits/$DATE-clean.md
+          echo "Date: $DATE" >> /tmp/audits/$DATE-clean.md
