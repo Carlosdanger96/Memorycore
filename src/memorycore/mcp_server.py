@@ -1,22 +1,24 @@
 from __future__ import annotations
-
 import os
 from pathlib import Path
 from typing import Any
-
 from mcp.server.fastmcp import FastMCP
-
 from .http_auth import StaticTokenVerifier
 from .memory_service import MemoryService
-from .models import ClientRole, MemoryStatus, validate_client_role
+from .models import ClientRole, MemoryStatus
+from .policy import (
+    ClientPolicy, MemoryAccessError, RevisionConflictError, policy_from_environment,
+)
+
+__all__ = ["MemoryAccessError", "RevisionConflictError", "MemoryMCPPolicy"]
 
 
-class MemoryAccessError(PermissionError):
-    """Raised when an MCP client exceeds this server's configured scope."""
-
-
-class MemoryMCPPolicy:
+class MemoryMCPPolicy(ClientPolicy):
     """Server-side guardrails for a shared Memorycore database.
+
+    Memorycore routes CLI commands and MCP tools through the same shared
+    ClientPolicy contract, so both interfaces obey identical lifecycle,
+    permission, duplicate, and provenance rules.
 
     Environment variables are deliberately simple so every MCP host can use the
     same server configuration:
@@ -31,52 +33,42 @@ class MemoryMCPPolicy:
     """
 
     def __init__(self, *, read_only: bool = False,
-                 allowed_projects: set[str] | None = None,
+                 allowed_projects: set[str] | frozenset[str] | None = None,
                  require_approval: bool = False,
                  client_id: str = "memorycore-client",
                  client_role: str = ClientRole.ADMINISTRATOR.value,
                  model_provider: str | None = None,
                  model_name: str | None = None) -> None:
-        self.read_only = read_only
-        self.allowed_projects = allowed_projects
-        self.require_approval = require_approval
-        self.client_id = client_id.strip() or "memorycore-client"
-        self.client_role = validate_client_role(client_role)
-        self.model_provider = model_provider
-        self.model_name = model_name
+        super().__init__(
+            client_id=client_id.strip() or "memorycore-client",
+            client_role=client_role,
+            allowed_projects=frozenset(allowed_projects) if allowed_projects is not None else None,
+            read_only=read_only,
+            require_approval=require_approval,
+            model_provider=model_provider,
+            model_name=model_name,
+        )
 
     @classmethod
     def from_environment(cls) -> "MemoryMCPPolicy":
-        raw_projects = os.getenv("MEMORYCORE_ALLOWED_PROJECTS", "")
-        projects = {item.strip() for item in raw_projects.split(",") if item.strip()}
+        base = policy_from_environment()
         return cls(
-            read_only=os.getenv("MEMORYCORE_READ_ONLY", "").lower() in {"1", "true", "yes"},
-            allowed_projects=projects or None,
-            require_approval=os.getenv("MEMORYCORE_REQUIRE_APPROVAL", "").lower() in {"1", "true", "yes"},
-            client_id=os.getenv("MEMORYCORE_CLIENT_ID", "memorycore-client"),
-            client_role=os.getenv("MEMORYCORE_CLIENT_ROLE", ClientRole.ADMINISTRATOR.value),
-            model_provider=os.getenv("MEMORYCORE_MODEL_PROVIDER") or None,
-            model_name=os.getenv("MEMORYCORE_MODEL_NAME") or None,
+            read_only=base.read_only,
+            allowed_projects=set(base.allowed_projects) if base.allowed_projects is not None else None,
+            require_approval=base.require_approval,
+            client_id=base.client_id,
+            client_role=base.client_role,
+            model_provider=base.model_provider,
+            model_name=base.model_name,
         )
 
-    def check_project(self, project_id: str) -> None:
-        if self.allowed_projects is not None and project_id not in self.allowed_projects:
-            raise MemoryAccessError(f"project is not allowed by this server: {project_id}")
-
-    def check_mutation(self) -> None:
-        if self.read_only:
-            raise MemoryAccessError("Memorycore is configured as read-only")
-
-    def require_role(self, *roles: ClientRole) -> None:
-        self.check_mutation()
-        if self.client_role not in {role.value for role in roles}:
-            allowed = ", ".join(role.value for role in roles)
-            raise MemoryAccessError(f"role {self.client_role} cannot perform this operation; requires {allowed}")
-
-    def creation_status(self) -> str:
-        if self.require_approval or self.client_role == ClientRole.WRITER.value:
-            return MemoryStatus.PENDING.value
-        return MemoryStatus.ACTIVE.value
+    def to_client_policy(self) -> ClientPolicy:
+        return ClientPolicy(
+            client_id=self.client_id, client_role=self.client_role,
+            allowed_projects=self.allowed_projects, read_only=self.read_only,
+            require_approval=self.require_approval,
+            model_provider=self.model_provider, model_name=self.model_name,
+        )
 
 
 class MemoryMCPAdapter:
@@ -93,7 +85,6 @@ class MemoryMCPAdapter:
         if self._token_verifier is None:
             return self._default_policy
         from mcp.server.auth.middleware.auth_context import get_access_token
-
         access_token = get_access_token()
         if access_token is None:
             raise MemoryAccessError("HTTP request has no authenticated client identity")
@@ -118,16 +109,18 @@ class MemoryMCPAdapter:
                          confidence: float | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         self.policy.check_project(project_id)
-        duplicate = self.service.find_exact_duplicate(project_id=project_id, memory_type=memory_type, content=content)
-        if duplicate is not None:
-            raise ValueError(f"exact duplicate memory exists: {duplicate.id}")
-        return self.service.add_memory(project_id=project_id, memory_type=memory_type,
-            content=content, summary=summary, tags=tags, created_by=self.policy.client_id,
+        result = self.service.add_memory_or_duplicate(
+            project_id=project_id, memory_type=memory_type, content=content,
+            summary=summary, tags=tags, created_by=self.policy.client_id,
             metadata=metadata, client_id=self.policy.client_id,
             model_provider=self.policy.model_provider, model_name=self.policy.model_name,
             session_id=session_id, source_type=source_type,
             source_uri=source_uri, source_id=source_id, confidence=confidence,
-            status=self.policy.creation_status()).to_dict()
+            status=self.policy.creation_status())
+        record = dict(result["memory"])
+        record["duplicate"] = result["duplicate"]
+        record["duplicate_of"] = result["memory"]["id"] if result["duplicate"] else None
+        return record
 
     async def memory_get(self, memory_id: str) -> dict[str, Any] | None:
         memory = self.service.get_memory(memory_id)
@@ -151,7 +144,8 @@ class MemoryMCPAdapter:
 
     async def memory_update(self, memory_id: str, content: str | None = None,
                             summary: str | None = None, tags: list[str] | None = None,
-                            metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                            metadata: dict[str, Any] | None = None,
+                            expected_revision: int | None = None) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
         if existing is not None:
@@ -161,7 +155,8 @@ class MemoryMCPAdapter:
             ):
                 raise MemoryAccessError("writers may only update their own pending memories")
         memory = self.service.update_memory(memory_id, content=content, summary=summary,
-            tags=tags, metadata=metadata, updated_by=self.policy.client_id)
+            tags=tags, metadata=metadata, updated_by=self.policy.client_id,
+            expected_revision=expected_revision)
         return memory.to_dict() if memory else None
 
     async def memory_approve(self, memory_id: str) -> dict[str, Any] | None:
@@ -231,7 +226,9 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
             "Shared durable memory for multiple LLM clients. Retrieve active project "
             "memory before writing. Memory identity and permissions are assigned by "
             "the Memorycore service, not supplied by the caller."
-        ), token_verifier=token_verifier, auth=auth,
+        ),
+        token_verifier=token_verifier,
+        auth=auth,
     )
     adapter = MemoryMCPAdapter(service, token_verifier=token_verifier)
     server.tool(name="memory_add")(adapter.memory_add)

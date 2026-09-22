@@ -1,5 +1,4 @@
 name: storage-tests
-
 on:
   push:
     branches: [main]
@@ -17,8 +16,57 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[test]"
+      - run: pip install -e ".[mcp-test]"
       - run: python -m compileall src tests
-      - run: pytest --ignore=tests/test_mcp.py
+      - name: Full test suite including MCP and cross-interface process tests
+        run: pytest -v
+      - name: Machine-readable completion report
+        run: python scripts/completion_report.py --output completion-report.json
+      - name: Upload completion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: completion-report-py${{ matrix.python-version }}
+          path: completion-report.json
       - run: memorycore --db ./ci-memorycore.db init
       - run: memorycore --db ./ci-memorycore.db doctor
+
+  windows-storage:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[mcp-test]"
+      - run: python -m compileall src tests
+      - name: Full test suite on Windows
+        run: pytest -v
+      - run: memorycore --db ./ci-memorycore.db init
+      - run: memorycore --db ./ci-memorycore.db doctor
+
+  wheel-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip build
+      - run: python -m build --wheel
+      - name: Install wheel into a clean venv and run the suite from it
+        run: |
+          python -m venv wheel-venv
+          wheel-venv/bin/pip install dist/memorycore-*.whl pytest pytest-asyncio "mcp>=1,<2"
+          WHEELDIR=$(mktemp -d)
+          cp -r tests pyproject.toml "$WHEELDIR/"
+          sed -i '/pythonpath/d' "$WHEELDIR/pyproject.toml"
+          cd "$WHEELDIR"
+          wheel-venv/bin/python -c "import memorycore, sys; print(memorycore.__file__)"
+          wheel-venv/bin/python -m pytest tests -v
+      - name: Smoke the installed console script
+        run: |
+          wheel-venv/bin/memorycore --db ./wheel-memorycore.db init
+          wheel-venv/bin/memorycore --db ./wheel-memorycore.db --client ci --role writer add --project ci --type fact --content "Installed wheel works"
+          wheel-venv/bin/memorycore --db ./wheel-memorycore.db check
