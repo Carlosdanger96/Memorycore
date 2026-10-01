@@ -58,13 +58,14 @@ jobs:
       - name: Install wheel into a clean venv and run the suite from it
         run: |
           python -m venv wheel-venv
-          wheel-venv/bin/pip install dist/memorycore-*.whl pytest pytest-asyncio "mcp>=1,<2"
+          WHEEL_PYTHON="$PWD/wheel-venv/bin/python"
+          "$WHEEL_PYTHON" -m pip install dist/memorycore-*.whl pytest pytest-asyncio "mcp>=1,<2"
           WHEELDIR=$(mktemp -d)
           cp -r tests pyproject.toml "$WHEELDIR/"
           sed -i '/pythonpath/d' "$WHEELDIR/pyproject.toml"
           cd "$WHEELDIR"
-          wheel-venv/bin/python -c "import memorycore, sys; print(memorycore.__file__)"
-          wheel-venv/bin/python -m pytest tests -v
+          "$WHEEL_PYTHON" -c "import memorycore, sys; from pathlib import Path; print(memorycore.__file__); assert Path(memorycore.__file__).is_relative_to(Path(sys.prefix))"
+          "$WHEEL_PYTHON" -m pytest tests -v
       - name: Smoke the installed console script
         run: |
           wheel-venv/bin/memorycore --db ./wheel-memorycore.db init

@@ -45,10 +45,6 @@ def content_fingerprint(project_id: str, memory_type: str, content: str) -> str:
     return digest.hexdigest()
 
 SCHEMA_SQL = """
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-
 CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -151,11 +147,31 @@ class SQLiteDatabase:
 
     def initialize(self) -> None:
         with self._lock:
-            self.connection.executescript(SCHEMA_SQL)
-            self._upgrade_status_constraint()
-            self._migrate_memories_table()
-            self._apply_migrations()
-            self.connection.commit()
+            self.connection.execute("PRAGMA foreign_keys = ON")
+            self._execute_with_retry("PRAGMA journal_mode = WAL")
+            # Acquire the process-wide SQLite write lock before inspecting schema
+            # state. All DDL, backfills and migration records commit together.
+            self._begin_immediate()
+            try:
+                self._execute_schema_script(SCHEMA_SQL)
+                self._upgrade_status_constraint()
+                self._migrate_memories_table()
+                self._apply_migrations()
+                self.connection.commit()
+            except BaseException:
+                self.connection.rollback()
+                raise
+
+    def _execute_schema_script(self, script: str) -> None:
+        """Execute embedded DDL without executescript's implicit COMMIT."""
+        statement = ""
+        for line in script.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                self.connection.execute(statement)
+                statement = ""
+        if statement.strip():
+            raise ValueError("incomplete schema statement")
 
     def _apply_migrations(self) -> None:
         migrations = [
@@ -170,10 +186,9 @@ class SQLiteDatabase:
                 if applied[version] != checksum:
                     raise RuntimeError(f"migration checksum mismatch for version {version}")
                 continue
-            if version == 1:
-                self.connection.execute("INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, datetime('now'))", (version, name, checksum))
-                continue
-            self.connection.executescript("BEGIN IMMEDIATE; " + sql + " INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (" + str(version) + ", '" + name + "', '" + checksum + "', datetime('now')); COMMIT;")
+            if version != 1:
+                self._execute_schema_script(sql)
+            self.connection.execute("INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (?, ?, ?, datetime('now'))", (version, name, checksum))
 
     def _upgrade_status_constraint(self) -> None:
         """Rebuild the v0.1 table when its CHECK constraint lacks new statuses.
@@ -188,8 +203,7 @@ class SQLiteDatabase:
         if "'pending'" in sql:
             return
         try:
-            self.connection.executescript("""
-            BEGIN IMMEDIATE;
+            self._execute_schema_script("""
             DROP TRIGGER IF EXISTS memories_ai;
             DROP TRIGGER IF EXISTS memories_ad;
             DROP TRIGGER IF EXISTS memories_au;
@@ -273,7 +287,6 @@ class SQLiteDatabase:
                 INSERT INTO memory_fts(id, content, summary, tags)
                 VALUES (new.id, new.content, COALESCE(new.summary, ''), new.tags);
             END;
-            COMMIT;
         """)
         except Exception:
             self.connection.rollback()
@@ -309,10 +322,9 @@ class SQLiteDatabase:
             WHERE content_fingerprint IS NOT NULL AND status IN ('pending', 'active')
             """
         )
-        self.connection.commit()
-        self.recompute_fingerprints()
+        self.recompute_fingerprints(commit=False)
 
-    def recompute_fingerprints(self) -> int:
+    def recompute_fingerprints(self, *, commit: bool = True) -> int:
         """Backfill fingerprints for existing rows; returns updated row count."""
         updated = 0
         rows = self.connection.execute(
@@ -327,7 +339,8 @@ class SQLiteDatabase:
                 (fingerprint, row["id"]),
             )
             updated += 1
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
         return updated
 
     def _execute_with_retry(self, sql: str, parameters: tuple = ()) -> sqlite3.Cursor:
@@ -518,7 +531,7 @@ class SQLiteDatabase:
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.connection.execute(
-                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY created_at ASC LIMIT ?",
+                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?",
                 (memory_id, limit),
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
@@ -531,7 +544,7 @@ class SQLiteDatabase:
     def all_events(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.connection.execute(
-                "SELECT * FROM memory_events ORDER BY created_at, id"
+                "SELECT * FROM memory_events ORDER BY created_at, rowid"
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
 
