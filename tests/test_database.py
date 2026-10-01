@@ -38,7 +38,9 @@ def test_lifecycle_is_deterministic_and_status_search_is_explicit(tmp_path):
     service.close()
 
 
-def test_memory_audit_history_is_persistent(tmp_path):
+def test_memory_audit_history_is_persistent(tmp_path, monkeypatch):
+    # Windows clock resolution can give consecutive events equal timestamps.
+    monkeypatch.setattr("memorycore.memory_service._now", lambda: "2026-01-01T00:00:00+00:00")
     path = tmp_path / "audit.db"
     service = MemoryService(path)
     memory = service.add_memory(project_id="alpha", memory_type="decision",
@@ -47,9 +49,10 @@ def test_memory_audit_history_is_persistent(tmp_path):
     history = service.get_memory_history(memory.id)
     assert [event["event_type"] for event in history] == ["memory_created", "memory_updated"]
     assert history[0]["client_id"] == "mistral"
+    assert service.database.all_events() == history
     service.close()
     reopened = MemoryService(path)
-    assert len(reopened.get_memory_history(memory.id)) == 2
+    assert reopened.get_memory_history(memory.id) == history
     reopened.close()
 
 

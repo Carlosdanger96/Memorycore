@@ -42,11 +42,14 @@ deterministic retrieval, backup/export/import, and a central MCP service mode.
 
 ## Status
 
-The repository contains the v0.2 prototype foundation. Possible-duplicate
-detection, PostgreSQL integration tests, and the Mistral Vibe ↔ Hermes live
-workflow remain required before calling it a complete shared-memory release.
-
-The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
+The base shared-memory layer is complete: CLI and MCP route through one
+governed service with identical lifecycle, permission, duplicate, provenance,
+and revision semantics; duplicate protection and multi-process write safety are
+enforced by the database itself; updates use compare-and-swap revision
+checking; backup restore and JSONL export/import preserve full fidelity; and
+an optional one-way Obsidian projection renders ordinary memories for human
+review. PostgreSQL integration tests remain future work for multi-host
+deployment.
 
 ## Requirements and downloads
 
@@ -122,10 +125,61 @@ The current storage foundation supports:
 - recent-memory retrieval;
 - updating content, summaries, tags, metadata, and status;
 - archiving memories without deleting them;
-- health checks;
+- health and integrity checks;
 - persistence after process restart.
 
-These operations provide the durable memory layer that future LLM integrations will share.
+These operations provide the durable memory layer that LLM integrations share.
+
+## CLI memory operations
+
+The `memorycore` CLI is a first-class interface alongside MCP. Both route through
+the same service and policy contracts, so lifecycle, permission, duplicate,
+provenance, and revision rules are identical across interfaces.
+
+```bash
+# Add a memory as a writer (creates a pending record awaiting approval)
+memorycore --db ./data/memorycore.db --client cli-writer --role writer \
+  add --project memorycore --type decision \
+  --content "Use one shared memory service" --summary "Shared service decision" \
+  --tag architecture --source conversation --confidence 0.9
+
+# Retrieve, search, update with compare-and-swap revision checking
+memorycore --db ./data/memorycore.db get <memory-id>
+memorycore --db ./data/memorycore.db --client reader --role reader \
+  search "shared memory" --project memorycore
+memorycore --db ./data/memorycore.db --client editor --role administrator \
+  update <memory-id> --summary "Revised" --expected-revision 0
+
+# Approval lifecycle
+memorycore --db ./data/memorycore.db --client approver --role approver approve <memory-id>
+memorycore --db ./data/memorycore.db --client approver --role approver reject <memory-id>
+memorycore --db ./data/memorycore.db --client approver --role approver archive <memory-id>
+memorycore --db ./data/memorycore.db history <memory-id>
+
+# Backup, restore, and full-fidelity JSONL export/import
+memorycore --db ./data/memorycore.db backup ./data/backup.db
+memorycore --db ./data/memorycore.db restore ./data/backup.db
+memorycore --db ./data/memorycore.db export ./data/snapshot.jsonl
+memorycore --db ./data/memorycore.db import ./data/snapshot.jsonl
+memorycore --db ./data/memorycore.db check
+```
+
+Duplicate protection is enforced by a database-level unique partial index over a
+normalized content fingerprint scoped by project and memory type, so independent
+processes racing to add equivalent content always converge on exactly one live
+record; every other writer receives the existing record as a deterministic
+duplicate result. Updates accept `--expected-revision` for compare-and-swap
+conflict detection: a stale revision fails with an explicit revision-conflict
+error instead of silently overwriting a concurrent update.
+
+An optional one-way Obsidian projection renders ordinary shared memories as
+Markdown for human review. It is generated from canonical SQLite state, is
+idempotent, and never becomes an independent source of truth:
+
+```bash
+MEMORYCORE_ALLOWED_VAULT_ROOTS=/path/to/vault memorycore --db ./data/memorycore.db \
+  project memorycore --vault /path/to/vault
+```
 
 ## Test
 
@@ -135,7 +189,11 @@ pip install -e ".[mcp-test]"
 pytest
 ```
 
-The storage test suite covers SQLite CRUD, FTS5 search, project scoping, update/archive behavior, CLI initialization, health checks, and restart persistence.
+The storage test suite covers SQLite CRUD, FTS5 search, project scoping, update/archive
+behavior, CLI initialization, health checks, restart persistence, real-process
+CLI↔MCP interoperability in both directions, atomic duplicate prevention under
+multi-process races, concurrent write safety, revision-conflict detection, backup
+restoration, and full-fidelity JSONL export/import.
 
 ## Shared LLM integration
 
@@ -214,7 +272,13 @@ The `v0.1.0` tag should be created only after:
 2. Database initialization and `doctor` pass on Windows.
 3. Add, retrieve, search, update, archive, close, reopen, and retrieve are verified on Windows.
 4. Backup and restore instructions are added and tested.
-5. Setup instructions are confirmed from a clean checkout.
+5. Setup instructions are confirmed from a clean checkout and from an installed wheel.
+6. The cross-interface process tests pass: CLI↔MCP interoperability in both
+   directions, atomic duplicate prevention under multi-process races, safe
+   concurrent writes, revision-conflict detection, backup restoration, and
+   full-fidelity JSONL export/import.
+7. `python scripts/completion_report.py` emits a machine-readable report with
+   every scenario passing.
 
 ## Project direction
 

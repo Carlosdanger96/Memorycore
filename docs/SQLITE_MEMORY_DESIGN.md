@@ -43,6 +43,19 @@ or normalized table.
 - Use controlled lifecycle transitions only; normal retrieval returns active
   memories only.
 - Keep audit history append-only. A correction preserves the original record.
+- Keep writes, audit events, lifecycle changes, and links in the same
+  transaction.
+- Enforce duplicate protection with a unique partial index over a normalized
+  content fingerprint scoped by project and memory type, covering only the
+  live `pending` and `active` lifecycle states. The application pre-check is
+  advisory; the database constraint is authoritative, so independent
+  processes racing on identical content converge on exactly one live record.
+- Keep a `revision` counter on every memory and support compare-and-swap
+  updates: a client may pass the revision it read, and a stale revision fails
+  with an explicit revision-conflict error instead of silently overwriting a
+  concurrent update.
+- Retry transient `database is locked` contention with a bounded busy timeout
+  and explicit retries; surfaced lock failures are errors, not data loss.
 
 ## Retrieval
 
@@ -81,9 +94,14 @@ and proven insufficient.
 3. Add append-only `memory_events` and transaction helpers.
 4. Add `memory_links` and atomic `memory_supersede` / `memory_correct`.
 5. Add `memory_tags` and active-memory partial indexes.
-6. Add exact normalized duplicate detection before an active write.
+6. Add exact normalized duplicate detection before an active write, and a
+   database unique partial index (migration 3:
+   `revision_and_duplicate_fingerprint`) so concurrent writers cannot both
+   pass the check.
 7. Add online backup, restore, JSONL export, and JSONL import.
 8. Add deterministic retrieval ranking and query-plan tests.
-9. Run a Mistral Vibe ↔ Hermes central-service workflow against one database.
+9. Run a Mistral Vibe ↔ Hermes central-service workflow against one database,
+   plus process-level CLI↔MCP interoperability, duplicate-race, concurrency,
+   revision-conflict, and restore proofs.
 10. Add PostgreSQL parity and remote OAuth only after the local prototype
     passes all prior steps.

@@ -21,12 +21,29 @@ Deployment](WEB_MCP_DEPLOYMENT.md). Normal HTTP mode requires bearer tokens.
 ```text
 memorycore init
 memorycore doctor
+memorycore check
 memorycore serve
 memorycore serve-http --host 127.0.0.1 --port 8000
+memorycore --client <id> --role <role> add --project <project> --type <type> --content "<text>"
+memorycore get <memory-id>
+memorycore search "<query>" --project <project>
+memorycore --client <id> --role <role> update <memory-id> --summary "<text>" --expected-revision <n>
+memorycore --client <id> --role approver approve <memory-id>
+memorycore --client <id> --role approver reject <memory-id>
+memorycore --client <id> --role approver archive <memory-id>
+memorycore history <memory-id>
+memorycore projects
 memorycore backup backup\memorycore.db
+memorycore restore backup\memorycore.db
 memorycore export export\memorycore.jsonl
 memorycore import export\memorycore.jsonl
+memorycore project <project> --vault <obsidian-vault>
 ```
+
+Roles are `reader`, `writer`, `approver`, and `administrator`; writers create
+pending records unless policy explicitly permits active creation. CLI and MCP
+share the same policy contract, so lifecycle, permission, duplicate,
+provenance, and revision rules are identical across both interfaces.
 
 Run `.\scripts\verify-windows.ps1` to recheck the installation and tests.
 

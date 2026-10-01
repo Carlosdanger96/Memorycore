@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,6 +14,7 @@ from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
 )
+from .policy import RevisionConflictError
 from .retrieval import build_fts_query, rank_memories, render_context
 
 
@@ -63,6 +66,33 @@ class MemoryService:
             client_id=client_id, new_state=values["status"], details={"memory_type": values["memory_type"]},
         ))
 
+    def add_memory_or_duplicate(self, **kwargs: Any) -> dict[str, Any]:
+        """Create a memory, or return the existing live record for identical content.
+
+        Both the application pre-check and the database unique partial index
+        enforce duplicate protection, so independent processes racing on the
+        same content always converge on exactly one live record.
+        """
+        if not isinstance(self.database, SQLiteDatabase):
+            memory = self.add_memory(**kwargs)
+            return {"duplicate": False, "memory": memory.to_dict()}
+        project_id = str(kwargs.get("project_id", "")).strip()
+        memory_type = validate_memory_type(str(kwargs.get("memory_type", "")))
+        content = str(kwargs.get("content", "")).strip()
+        existing = self.database.find_live_by_fingerprint(project_id, memory_type, content)
+        if existing is not None:
+            return {"duplicate": True, "memory": existing.to_dict()}
+        try:
+            memory = self.add_memory(memory_type=memory_type, content=content, **{
+                key: value for key, value in kwargs.items()
+                if key not in {"memory_type", "content"}})
+        except sqlite3.IntegrityError:
+            existing = self.database.find_live_by_fingerprint(project_id, memory_type, content)
+            if existing is not None:
+                return {"duplicate": True, "memory": existing.to_dict()}
+            raise
+        return {"duplicate": False, "memory": memory.to_dict()}
+
     def get_memory(self, memory_id: str) -> Memory | None:
         return self.database.get(memory_id)
 
@@ -89,7 +119,7 @@ class MemoryService:
     def find_exact_duplicate(self, *, project_id: str, memory_type: str, content: str) -> Memory | None:
         if not isinstance(self.database, SQLiteDatabase):
             return None
-        return self.database.find_exact_active(project_id.strip(), validate_memory_type(memory_type), content.strip())
+        return self.database.find_live_by_fingerprint(project_id.strip(), validate_memory_type(memory_type), content.strip())
 
     def retrieve_context(self, *, query: str, project_id: str, limit: int = 10,
                          memory_type: str | None = None,
@@ -106,10 +136,13 @@ class MemoryService:
                       summary: str | None = None, tags: list[str] | None = None,
                       metadata: dict[str, Any] | None = None,
                       status: str | None = None,
-                      updated_by: str | None = None) -> Memory | None:
+                      updated_by: str | None = None,
+                      expected_revision: int | None = None) -> Memory | None:
         current = self.get_memory(memory_id)
         if current is None:
             return None
+        if expected_revision is not None and int(expected_revision) != int(current.revision):
+            raise RevisionConflictError(memory_id, int(current.revision), int(expected_revision))
         values: dict[str, Any] = {"updated_at": _now()}
         if content is not None:
             if not content.strip():
@@ -132,11 +165,15 @@ class MemoryService:
                 MemoryStatus.REJECTED.value: "memory_rejected",
                 MemoryStatus.ARCHIVED.value: "memory_archived",
             }.get(values["status"], "memory_status_changed")
-        return self.database.update(memory_id, values, self._event(
+        result = self.database.update(memory_id, values, self._event(
             memory_id=memory_id, project_id=current.project_id, event_type=event_type,
             client_id=updated_by, previous_state=current.status,
-            new_state=values.get("status", current.status), details={"fields": sorted(values.keys())},
-        ))
+            new_state=values.get("status", current.status),
+            details={"fields": sorted(values.keys()), "revision": int(current.revision) + 1},
+        ), expected_revision=expected_revision)
+        if result is not None and int(result.revision) <= int(current.revision):
+            raise RevisionConflictError(memory_id, int(current.revision), int(current.revision))
+        return result
 
     def archive_memory(self, memory_id: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.ARCHIVED.value)
@@ -191,6 +228,11 @@ class MemoryService:
     def health(self) -> dict[str, Any]:
         return self.database.health()
 
+    def integrity_check(self) -> dict[str, Any]:
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("integrity check is only available for the SQLite storage adapter")
+        return self.database.integrity_check()
+
     def get_memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
@@ -202,6 +244,7 @@ class MemoryService:
         self.database.backup_to(destination)
 
     def export_jsonl(self, destination: str | Path) -> int:
+        """Full-fidelity export: memories, timestamps, provenance, events, and links."""
         if not isinstance(self.database, SQLiteDatabase):
             raise RuntimeError("JSONL export is only available for the SQLite storage adapter")
         path = Path(destination).expanduser()
@@ -210,29 +253,67 @@ class MemoryService:
         with path.open("w", encoding="utf-8") as handle:
             for memory in memories:
                 handle.write(json.dumps({"record_type": "memory", **memory.to_dict()}, ensure_ascii=False) + "\n")
-                for event in self.get_memory_history(memory.id):
-                    handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
+            for event in self.database.all_events():
+                handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
+            for link in self.database.all_links():
+                handle.write(json.dumps({"record_type": "memory_link", **link}, ensure_ascii=False) + "\n")
         return len(memories)
 
     def import_jsonl(self, source: str | Path) -> int:
+        """Full-fidelity import preserving IDs, timestamps, provenance, events, and links."""
         if not isinstance(self.database, SQLiteDatabase):
             raise RuntimeError("JSONL import is only available for the SQLite storage adapter")
-        imported = 0
+        memories: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        memory_ids: set[str] = set()
         with Path(source).expanduser().open(encoding="utf-8") as handle:
             for line in handle:
                 record = json.loads(line)
-                if record.get("record_type") != "memory" or self.get_memory(record["id"]):
-                    continue
-                self.add_memory(project_id=record["project_id"], memory_type=record["memory_type"],
-                    content=record["content"], summary=record.get("summary"), tags=record.get("tags"),
-                    created_by=record.get("created_by"), client_id=record.get("client_id"),
-                    model_provider=record.get("model_provider"), model_name=record.get("model_name"),
-                    session_id=record.get("session_id"), source_type=record.get("source_type", "manual_import"),
-                    source_uri=record.get("source_uri"), source_id=record.get("source_id"),
-                    confidence=record.get("confidence"), metadata=record.get("metadata"),
-                    status=record.get("status", "active"), memory_id=record["id"])
-                imported += 1
-        return imported
+                record_type = record.get("record_type")
+                if record_type == "memory":
+                    if record["id"] in memory_ids:
+                        continue
+                    memory_ids.add(record["id"])
+                    memories.append(record)
+                elif record_type == "memory_event":
+                    event = {key: value for key, value in record.items() if key != "record_type"}
+                    events.append(event)
+                elif record_type == "memory_link":
+                    link = {key: value for key, value in record.items() if key != "record_type"}
+                    links.append(link)
+                else:
+                    raise ValueError(f"unknown JSONL record type: {record_type}")
+        if not memories:
+            raise ValueError("JSONL import requires at least one memory record")
+        memories_without_events = memory_ids - {event["memory_id"] for event in events}
+        if memories_without_events:
+            raise ValueError(
+                "JSONL import requires full-fidelity records: memories without audit "
+                "events cannot be imported (re-export with audit history)")
+        missing_events = [e for e in events if e["memory_id"] not in memory_ids]
+        if missing_events:
+            raise ValueError("JSONL import references events for unknown memories")
+        self.database.replace_all_memories(memories, events, links)
+        return len(memories)
+
+    def restore(self, source: str | Path) -> None:
+        """Restore from a backup, preserving the original database file first."""
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("restore is only available for the SQLite storage adapter")
+        original = self.database.path
+        backup_of_original = original.with_name(original.name + ".pre-restore")
+        if original.exists():
+            shutil.copy2(original, backup_of_original)
+        try:
+            self.database.restore_from(source)
+        except BaseException:
+            if backup_of_original.exists():
+                shutil.copy2(backup_of_original, original)
+            raise
+        finally:
+            if backup_of_original.exists():
+                backup_of_original.unlink()
 
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,
