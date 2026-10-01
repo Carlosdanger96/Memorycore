@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "decisions": [
+    {
+      "project_id": "hermesbag",
+      "memory_type": "decision",
+      "content": "Example decision: use SQLite as canonical memory storage.",
+      "source_type": "document",
+      "source_uri": "urn:example:operator-decisions",
+      "source_id": "storage-v1"
+    }
+  ]
+}

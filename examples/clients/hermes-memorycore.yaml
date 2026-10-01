@@ -1,0 +1,20 @@
+# Merge this entry into Hermes config.yaml after replacing both absolute paths.
+# The first connection fills Hermes' schema cache; later starts can stay lazy.
+mcp_servers:
+  memorycore:
+    command: 'C:\PATH\TO\Memorycore\.venv\Scripts\python.exe'
+    args: ['-m', 'memorycore.mcp_server']
+    env:
+      MEMORYCORE_DB: 'C:\PATH\TO\Memorycore\data\memorycore.db'
+      MEMORYCORE_CLIENT_ID: hermes
+      MEMORYCORE_CLIENT_ROLE: reader
+      MEMORYCORE_ALLOWED_PROJECTS: hermesbag
+      MEMORYCORE_READ_ONLY: 'true'
+    lazy: true
+    idle_timeout_seconds: 300
+    connect_timeout: 30
+    timeout: 30
+    tools:
+      include: [memory_get, memory_search, memory_retrieve_context, memory_history, memory_health]
+      resources: false
+      prompts: false

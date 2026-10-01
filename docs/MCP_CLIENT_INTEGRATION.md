@@ -6,14 +6,20 @@ the same SQLite database. Each process has a server-assigned identity and role.
 | Client | Role | Purpose |
 | --- | --- | --- |
 | Mistral Vibe | `writer` | Adds pending memories and updates its own pending records. |
-| Hermes | `approver` | Reviews, approves, corrects, and supersedes project memory. |
+| Hermes | `reader` | Retrieves current memory, sources, and history. |
+| Automated reviewer | `approver` | Verifies supported candidates and promotes or supersedes them atomically. |
 
 Copy the Mistral configuration from
 `examples/clients/mistral-vibe-memorycore.toml` and configure Hermes with
-`examples/clients/hermes-memorycore.env`. Both must use the same
+`examples/clients/hermes-memorycore.yaml` (or its `.env` companion). All must use the same
 `MEMORYCORE_DB` path.
 
-The automated `test_cross_client.py` test validates the same MCP protocol
+The [shared-memory cycle](SHARED_MEMORY_CYCLE.md) describes automated review,
+the trusted source format, a six-step process test, and the remaining desktop
+acceptance run. The reviewer has its own configuration in
+`examples/clients/automated-reviewer.env`.
+
+The older `test_cross_client.py` test retains the manual-approval MCP protocol
 workflow without requiring either desktop application to be installed:
 
 1. Mistral writes a pending memory.

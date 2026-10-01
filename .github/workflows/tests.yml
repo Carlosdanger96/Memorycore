@@ -20,6 +20,8 @@ jobs:
       - run: python -m compileall src tests
       - name: Full test suite including MCP and cross-interface process tests
         run: pytest -v
+        env:
+          MEMORYCORE_CYCLE_REPORT: shared-cycle-report.json
       - name: Machine-readable completion report
         run: python scripts/completion_report.py --output completion-report.json
       - name: Upload completion report
@@ -28,6 +30,12 @@ jobs:
         with:
           name: completion-report-py${{ matrix.python-version }}
           path: completion-report.json
+      - name: Upload shared-memory cycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-cycle-py${{ matrix.python-version }}
+          path: shared-cycle-report.json
       - run: memorycore --db ./ci-memorycore.db init
       - run: memorycore --db ./ci-memorycore.db doctor
 
@@ -43,6 +51,14 @@ jobs:
       - run: python -m compileall src tests
       - name: Full test suite on Windows
         run: pytest -v
+        env:
+          MEMORYCORE_CYCLE_REPORT: shared-cycle-report.json
+      - name: Upload Windows shared-memory cycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-cycle-windows
+          path: shared-cycle-report.json
       - run: memorycore --db ./ci-memorycore.db init
       - run: memorycore --db ./ci-memorycore.db doctor
 

@@ -14,7 +14,7 @@ from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
 )
-from .policy import RevisionConflictError
+from .policy import ClientPolicy, RevisionConflictError
 from .retrieval import build_fts_query, rank_memories, render_context
 
 
@@ -180,6 +180,12 @@ class MemoryService:
 
     def approve_memory(self, memory_id: str, *, approved_by: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.ACTIVE.value, updated_by=approved_by)
+
+    def review_memory(self, memory_id: str, *, policy: ClientPolicy,
+                      expected_revision: int, expected_content_sha256: str) -> dict[str, Any]:
+        from .review import review_candidate
+        return review_candidate(self, policy, memory_id, expected_revision=expected_revision,
+                                expected_content_sha256=expected_content_sha256)
 
     def reject_memory(self, memory_id: str, *, rejected_by: str) -> Memory | None:
         return self.update_memory(memory_id, status=MemoryStatus.REJECTED.value, updated_by=rejected_by)
