@@ -64,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--expected-revision", type=int, default=None,
                         help="fail with a conflict error if the stored revision differs")
 
+    review = subcommands.add_parser("review", help="automated exact-source review of a pending candidate")
+    review.add_argument("memory_id")
+    review.add_argument("--expected-revision", type=int, required=True)
+    review.add_argument("--content-sha256", required=True)
+
     for name, help_text in (
         ("approve", "approve a pending memory (approver/administrator)"),
         ("reject", "reject a pending memory (approver/administrator)"),
@@ -216,6 +221,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         policy = _policy_from_args(args)
 
+        if args.command == "review":
+            result = service.review_memory(args.memory_id, policy=policy,
+                expected_revision=args.expected_revision, expected_content_sha256=args.content_sha256)
+            _emit(result)
+            return 0
+
         if args.command == "add":
             policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
             policy.check_project(args.project)
@@ -305,6 +316,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _fail(f"unknown command: {args.command}", code=2)
     except MemoryAccessError as error:
         return _fail(str(error), code=4)
+    except RevisionConflictError as error:
+        return _fail(str(error), code=3)
+    except OSError as error:
+        return _fail(str(error))
     except (ValueError, KeyError) as error:
         return _fail(str(error))
     finally:

@@ -169,6 +169,12 @@ class MemoryMCPAdapter:
         memory = self.service.approve_memory(memory_id, approved_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
+    async def memory_review(self, memory_id: str, expected_revision: int,
+                            expected_content_sha256: str) -> dict[str, Any]:
+        """Review an exact candidate against service-configured trusted source decisions."""
+        return self.service.review_memory(memory_id, policy=self.policy,
+            expected_revision=expected_revision, expected_content_sha256=expected_content_sha256)
+
     async def memory_reject(self, memory_id: str) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
@@ -237,6 +243,7 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     server.tool(name="memory_retrieve_context")(adapter.memory_retrieve_context)
     server.tool(name="memory_update")(adapter.memory_update)
     server.tool(name="memory_approve")(adapter.memory_approve)
+    server.tool(name="memory_review")(adapter.memory_review)
     server.tool(name="memory_reject")(adapter.memory_reject)
     server.tool(name="memory_supersede")(adapter.memory_supersede)
     server.tool(name="memory_correct")(adapter.memory_correct)

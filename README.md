@@ -183,6 +183,11 @@ MEMORYCORE_ALLOWED_VAULT_ROOTS=/path/to/vault memorycore --db ./data/memorycore.
 
 ## Test
 
+The [six-step shared-memory cycle](docs/SHARED_MEMORY_CYCLE.md) adds a bounded
+automated reviewer, atomic reviewed corrections, and process-level evidence.
+The [Hermes efficiency trial](docs/HERMES_EFFICIENCY_TRIAL.md) covers lazy MCP
+startup and an optional RTK comparison with explicit acceptance and rollback.
+
 ```powershell
 python -m compileall src tests
 pip install -e ".[mcp-test]"

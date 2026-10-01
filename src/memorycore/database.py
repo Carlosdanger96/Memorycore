@@ -536,6 +536,61 @@ class SQLiteDatabase:
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
 
+    def get_event(self, event_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.connection.execute("SELECT * FROM memory_events WHERE id = ?", (event_id,)).fetchone()
+        return {**dict(row), "details": json.loads(row["details"])} if row else None
+
+    def apply_review(self, reviewed: Memory, event: dict[str, Any], *,
+                     supersedes: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Commit one hash-bound review, lifecycle change and optional link atomically."""
+        with self._lock:
+            self._begin_immediate()
+            try:
+                previous = self.get_event(event["id"])
+                if previous is not None:
+                    self.connection.commit()
+                    return {"details": previous["details"], "replayed": True}
+                current = self.get(reviewed.id)
+                if current is None:
+                    raise ValueError("candidate disappeared during review")
+                if current.to_dict() != reviewed.to_dict():
+                    raise RevisionConflictError(reviewed.id, current.revision, reviewed.revision)
+                if current.status != "pending":
+                    raise ValueError("only pending candidates can be reviewed")
+                if supersedes is not None:
+                    original = self.get(supersedes["memory_id"])
+                    if original is None or original.status != "active":
+                        raise ValueError("superseded memory is no longer active")
+                    if original.revision != supersedes["revision"]:
+                        raise RevisionConflictError(original.id, original.revision, supersedes["revision"])
+                    if (original.id == current.id or original.project_id != current.project_id
+                            or original.memory_type != current.memory_type or event["new_state"] != "active"):
+                        raise ValueError("invalid reviewed replacement")
+                    self.connection.execute(
+                        "UPDATE memories SET status='superseded', revision=revision+1, updated_by=?, updated_at=? WHERE id=?",
+                        (event["client_id"], event["created_at"], original.id))
+                    self.connection.execute(
+                        "INSERT INTO memory_links(id, from_memory_id, to_memory_id, relation_type, created_by, created_at) VALUES (?, ?, ?, 'supersedes', ?, ?)",
+                        (event["id"] + "-link", current.id, original.id, event["client_id"], event["created_at"]))
+                    self._insert_event({**event, "id": event["id"] + "-superseded",
+                        "memory_id": original.id, "event_type": "memory_superseded",
+                        "previous_state": "active", "new_state": "superseded",
+                        "details": {"replacement_id": current.id, "review_event_id": event["id"]}})
+                if event["new_state"] != current.status:
+                    self.connection.execute(
+                        "UPDATE memories SET status=?, revision=revision+1, updated_by=?, updated_at=? WHERE id=?",
+                        (event["new_state"], event["client_id"], event["created_at"], current.id))
+                    self._insert_event({**event, "id": event["id"] + "-transition",
+                        "event_type": "memory_approved" if event["new_state"] == "active" else "memory_rejected",
+                        "details": {"review_event_id": event["id"]}})
+                self._insert_event(event)
+                self.connection.commit()
+            except BaseException:
+                self.connection.rollback()
+                raise
+        return {"details": event["details"], "replayed": False}
+
     def all_memories(self) -> list[Memory]:
         with self._lock:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
