@@ -216,19 +216,22 @@ def _scenario_e(workdir: Path, report: dict) -> None:
          "--client", "loser", "--role", "administrator", "update", base["id"],
          "--summary", "Loser", "--expected-revision", "0"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=str(REPO_ROOT))
-    winner.communicate(timeout=60)
-    _, loser_err = loser.communicate(timeout=60)
-    conflict_detected = loser.returncode == 3 and "revision conflict" in loser_err
+    outputs = [winner.communicate(timeout=60), loser.communicate(timeout=60)]
+    returncodes = [winner.returncode, loser.returncode]
+    # Launch order does not determine which independent process wins the lock.
+    conflict_detected = sorted(returncodes) == [0, 3] and "revision conflict" in outputs[returncodes.index(3)][1]
+    final = _cli(database, ["get", base["id"]], client="cli-admin", role="administrator")
 
     report["scenarios"]["E_concurrent_write_safety"] = {
         "ok": not failures and counts["memories"] == 16 and counts["events"] == 16
               and integrity == "ok" and not fk and fts == 16
-              and winner.returncode == 0 and conflict_detected,
+              and conflict_detected and final["revision"] == 1,
         "database": str(database),
         "clients": [f"writer-{i}" for i in range(16)] + ["winner", "loser"],
         "counts": counts, "integrity": integrity, "fts_hits": fts,
         "write_failures": failures,
         "revision_conflict_detected": conflict_detected,
+        "update_returncodes": returncodes,
     }
 
 
