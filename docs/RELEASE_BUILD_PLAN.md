@@ -46,7 +46,7 @@ Omni vault remain outside the test fixtures.
 
 ## 6. Release evidence
 
-- [ ] Pass CI on Python 3.11, 3.12, and 3.13 and a clean Windows checkout.
+- [x] Pass CI on Python 3.11, 3.12, and 3.13 and a clean Windows checkout.
 - [x] Rehearse loss and restore of a disposable database, comparing IDs, links,
   audit order, project boundaries, and search results.
 - [ ] Match deployment docs to the tested build; only then mark the roadmap
@@ -60,3 +60,7 @@ and 49 tests on Python 3.11, 3.12, and 3.13 with disposable PostgreSQL. The
 later checkout includes a restarted authenticated HTTP workflow and a
 standalone recovery rehearsal. An isolated Vibe instance reached MCP tool
 discovery, then rejected the configured Mistral API key before a model call.
+PR #14's GitHub Actions run 105 passed all three Python jobs with PostgreSQL
+17. An isolated Hermes instance reached MCP tool discovery, then failed during
+agent startup because its temporary runtime lacks an OpenAI SDK module. Neither
+probe proves a real model-driven cross-client handoff.
