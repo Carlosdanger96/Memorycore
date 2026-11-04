@@ -38,6 +38,9 @@ Omni vault remain outside the test fixtures.
 
 ## 5. Real clients
 
+- [x] Run an isolated Vibe client against local Ollama and the shared HTTP MCP
+  endpoint. Vibe created a pending record under its writer identity; a separate
+  reviewer identity retrieved its exact content and approved it through MCP.
 - [ ] Configure Mistral Vibe and Hermes for the same central endpoint with
   separate identities; prove write, review, correction, retrieval, and history
   through both real clients after restart.
@@ -58,9 +61,14 @@ require the owner's environment. These gates remain open until observed there.
 Local evidence on 2026-11-03: a clean Windows checkout passed setup, doctor,
 and 49 tests on Python 3.11, 3.12, and 3.13 with disposable PostgreSQL. The
 later checkout includes a restarted authenticated HTTP workflow and a
-standalone recovery rehearsal. An isolated Vibe instance reached MCP tool
-discovery, then rejected the configured Mistral API key before a model call.
-PR #14's GitHub Actions run 105 passed all three Python jobs with PostgreSQL
-17. An isolated Hermes instance reached MCP tool discovery, then failed during
-agent startup because its temporary runtime lacks an OpenAI SDK module. Neither
-probe proves a real model-driven cross-client handoff.
+standalone recovery rehearsal. An isolated Vibe instance used the local Ollama
+model `huihui_ai/qwen3.5-abliterated:4b` to create pending record
+`e6a75ae4-babe-45a7-a81b-678a1a21e191` in a disposable database. A separate
+Python MCP reviewer retrieved the exact phrase and approved it. A second Vibe
+run retrieved the record but did not complete approval within its turn limit;
+the model generated incorrect tool-result handling. This proves a real Vibe
+write and a separate authorized client review, but not the full Hermes/Vibe
+handoff. PR #14's GitHub Actions run 106 passed all three Python jobs with
+PostgreSQL 17. An isolated Hermes instance reached MCP tool discovery, then
+failed during agent startup because its temporary runtime lacks an OpenAI SDK
+module. The Mistral API key is unnecessary for this Ollama-backed Vibe path.
