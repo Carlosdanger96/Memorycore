@@ -25,7 +25,7 @@ def postgres_url():
     with admin.connect() as connection:
         connection.execute(text(f"CREATE DATABASE {name}"))
     try:
-        yield str(make_url(configured).set(database=name))
+        yield make_url(configured).set(database=name).render_as_string(hide_password=False)
     finally:
         with admin.connect() as connection:
             connection.execute(text(f"DROP DATABASE {name} WITH (FORCE)"))

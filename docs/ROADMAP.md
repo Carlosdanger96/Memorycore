@@ -41,7 +41,7 @@ integration follows completion of the Memorycore gates below.
 ## Release evidence
 
 - [ ] CI passes on Python 3.11, 3.12, and 3.13.
-- [ ] A clean Windows checkout passes setup, doctor, tests, backup and restore.
+- [x] A clean Windows checkout passes setup, doctor, tests, backup and restore.
 - [x] Recovery rehearsal preserves IDs, relationships, audit order, project
   boundaries, and search results.
 - [ ] Release documentation matches the deployed service and its security

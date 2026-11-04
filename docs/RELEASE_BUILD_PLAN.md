@@ -57,6 +57,6 @@ require the owner's environment. These gates remain open until observed there.
 
 Local evidence on 2026-11-03: a clean Windows checkout passed setup, doctor,
 and 49 tests on Python 3.11, 3.12, and 3.13 with disposable PostgreSQL. The
-later 51-test checkout includes a restarted authenticated HTTP workflow and a
+later checkout includes a restarted authenticated HTTP workflow and a
 standalone recovery rehearsal. An isolated Vibe instance reached MCP tool
 discovery, then rejected the configured Mistral API key before a model call.

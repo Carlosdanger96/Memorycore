@@ -49,9 +49,11 @@ deterministic retrieval, backup/export/import, and a central MCP service mode.
 
 ## Status
 
-The repository contains the v0.2 prototype foundation. PostgreSQL migration
-and recovery parity, and the Mistral Vibe ↔ Hermes live
-workflow remain required before calling it a complete shared-memory release.
+The repository contains the v0.2 prototype foundation. Local PostgreSQL
+migration and recovery tests pass against a disposable server. A deployed
+central-service recovery test, external HTTPS/OAuth verification, the Mistral
+Vibe ↔ Hermes live workflow, and ChatGPT connector discovery remain required
+before calling it a complete shared-memory release.
 
 The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
 
