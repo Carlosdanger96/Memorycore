@@ -193,6 +193,7 @@ class JWKSClientVerifier:
             if client_id not in self.identities or "memorycore" not in scopes:
                 return None
             return AccessToken(token=token, client_id=client_id,
-                               scopes=scopes, expires_at=claims["exp"])
+                               scopes=scopes, expires_at=claims["exp"],
+                               resource=self.audience)
         except (self._jwt.PyJWTError, ValueError, TypeError, KeyError):
             return None

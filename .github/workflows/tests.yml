@@ -36,5 +36,6 @@ jobs:
       - run: pip install -e ".[mcp-test,postgres,oauth]"
       - run: python -m compileall src tests
       - run: pytest
+      - run: python scripts/rehearse-recovery.py
       - run: memorycore --db ./ci-memorycore.db init
       - run: memorycore --db ./ci-memorycore.db doctor

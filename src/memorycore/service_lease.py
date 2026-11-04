@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 def _lease_path(target: str | Path) -> Path:
     value = str(target)
-    if value.startswith(("postgresql://", "postgres://")):
+    if value.startswith(("postgresql://", "postgresql+psycopg://", "postgres://")):
         url = urlsplit(value)
         value = f"postgresql://{(url.hostname or '').lower()}:{url.port or 5432}{url.path}"
     else:

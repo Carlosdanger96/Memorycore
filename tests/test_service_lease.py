@@ -17,4 +17,7 @@ def test_postgres_lease_identity_excludes_credentials():
     first = "postgresql://writer:secret-a@127.0.0.1:5432/memorycore"
     second = "postgresql://reviewer:secret-b@127.0.0.1/memorycore"
     assert _lease_path(first) == _lease_path(second)
+    assert _lease_path(first) == _lease_path(
+        "postgresql+psycopg://reviewer:secret-c@127.0.0.1/memorycore"
+    )
     assert "secret" not in str(_lease_path(first))

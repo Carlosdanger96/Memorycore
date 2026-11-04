@@ -39,7 +39,7 @@ _MAX_CANDIDATE_POOL = 5000
 class MemoryService:
     def __init__(self, database_path: str | Path) -> None:
         database_target = str(database_path)
-        self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgres://")) else SQLiteDatabase(database_path)
+        self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgresql+psycopg://", "postgres://")) else SQLiteDatabase(database_path)
         self.database.initialize()
 
     def close(self) -> None:

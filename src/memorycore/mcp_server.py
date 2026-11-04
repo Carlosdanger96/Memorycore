@@ -330,7 +330,10 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
         # but FastMCP requires a valid issuer URL when enabling its auth layer.
         issuer_url = (token_verifier.issuer if isinstance(token_verifier, JWKSClientVerifier)
                       else os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid"))
-        auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url)
+        options = {}
+        if "validate_token_resource" in getattr(AuthSettings, "model_fields", {}):
+            options["validate_token_resource"] = isinstance(token_verifier, JWKSClientVerifier)
+        auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url, **options)
     server = FastMCP(
         "Memorycore",
         instructions=(

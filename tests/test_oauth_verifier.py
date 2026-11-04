@@ -84,6 +84,14 @@ async def test_oauth_identity_reaches_http_mcp_policy(verifier, tmp_path):
             async with httpx.AsyncClient(transport=transport,
                                          base_url="http://127.0.0.1:8000") as anonymous:
                 assert (await anonymous.post("/mcp", content=b"{}")).status_code == 401
+                for bad_token in (
+                    signed(key, aud="https://other.example.test/mcp"),
+                    signed(key, exp=1),
+                    signed(rsa.generate_private_key(public_exponent=65537, key_size=2048)),
+                ):
+                    denied = await anonymous.post("/mcp", content=b"{}",
+                                                  headers={"Authorization": "Bearer " + bad_token})
+                    assert denied.status_code == 401
             async with httpx.AsyncClient(transport=transport,
                     base_url="http://127.0.0.1:8000",
                     headers={"Authorization": "Bearer " + signed(key)}) as client:

@@ -22,7 +22,7 @@ integration follows completion of the Memorycore gates below.
   including concurrent writes and reviewer-visible candidate IDs.
 - [x] Durable policy-denial and HTTP 401/403 audit without headers, tokens,
   or request content; included in JSONL recovery.
-- [ ] Clean-install and migration tests on Windows and supported Python versions.
+- [x] Clean-install and migration tests on Windows and supported Python versions.
 
 ## Shared service
 
@@ -30,7 +30,7 @@ integration follows completion of the Memorycore gates below.
   client identity, roles, project allowlists, and pending approval.
 - [ ] One central service instance owns the production database; operational
   health, restart, and recovery behavior are verified.
-- [ ] PostgreSQL schema, migration, transaction, retrieval, audit, and recovery
+- [x] PostgreSQL schema, migration, transaction, retrieval, audit, and recovery
   parity pass against a real PostgreSQL instance.
 - [ ] Remote HTTPS access uses verified OAuth-derived identity and roles.
 - [ ] Mistral Vibe and Hermes each use the real service to write, review,
@@ -42,7 +42,7 @@ integration follows completion of the Memorycore gates below.
 
 - [ ] CI passes on Python 3.11, 3.12, and 3.13.
 - [ ] A clean Windows checkout passes setup, doctor, tests, backup and restore.
-- [ ] Recovery rehearsal preserves IDs, relationships, audit order, project
+- [x] Recovery rehearsal preserves IDs, relationships, audit order, project
   boundaries, and search results.
 - [ ] Release documentation matches the deployed service and its security
   boundaries; tag only after every applicable gate above passes.

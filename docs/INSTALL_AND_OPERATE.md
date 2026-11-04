@@ -50,6 +50,10 @@ snapshot atomically into an **empty** initialized Memorycore database. It reject
 older partial JSONL exports because those cannot restore complete history and
 links. Keep an untouched backup before attempting a restore.
 
+Run `python scripts/rehearse-recovery.py` before release. It creates only
+disposable databases and compares IDs, provenance, audit order, links, project
+boundaries, and search after online backup and JSONL restore.
+
 ## PostgreSQL central-service development
 
 ```powershell

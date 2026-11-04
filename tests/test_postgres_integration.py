@@ -116,6 +116,7 @@ def test_postgres_jsonl_recovery_preserves_relationships(postgres_url, tmp_path)
     assert service.export_jsonl(export) == 2
     service.close()
 
+
     # Only the disposable test database is cleared. The versioned JSONL file
     # then exercises the same restore contract as SQLite.
     service = MemoryService(postgres_url)
@@ -130,3 +131,55 @@ def test_postgres_jsonl_recovery_preserves_relationships(postgres_url, tmp_path)
     assert after[1:] == before[1:]
     assert service.get_memory(replacement.id).status == "active"
     service.close()
+
+
+def test_postgres_existing_schema_upgrade_preserves_records_and_audit(postgres_url):
+    from sqlalchemy import create_engine, text
+
+    service = MemoryService(postgres_url)
+    created = service.add_memory(project_id="alpha", memory_type="fact",
+                                 content="Existing PostgreSQL fact",
+                                 source_type="document", source_uri="notes/old.md")
+    service.close()
+
+    # Model an older deployed schema in the disposable database. The migration
+    # runner must recreate supporting tables and ordering without data loss.
+    engine = create_engine(postgres_url)
+    with engine.begin() as connection:
+        connection.execute(text("DROP TABLE access_events"))
+        connection.execute(text("DROP TABLE memory_links"))
+        connection.execute(text("ALTER TABLE memory_events DROP COLUMN event_order"))
+        connection.execute(text("DROP TABLE schema_migrations"))
+    engine.dispose()
+
+    reopened = MemoryService(postgres_url)
+    try:
+        assert reopened.get_memory(created.id).source_uri == "notes/old.md"
+        assert reopened.get_memory_history(created.id)[0]["event_type"] == "memory_created"
+        assert reopened.search_memory(query="PostgreSQL fact", project_id="alpha")[0].id == created.id
+        with reopened.database.engine.connect() as connection:
+            versions = connection.execute(text("SELECT version FROM schema_migrations ORDER BY version")).scalars().all()
+        assert versions == [1, 2]
+    finally:
+        reopened.close()
+
+
+def test_postgres_rejects_changed_migration_checksum(postgres_url):
+    from sqlalchemy import create_engine, text
+
+    MemoryService(postgres_url).close()
+    engine = create_engine(postgres_url)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE schema_migrations SET checksum='tampered' WHERE version=2"))
+    engine.dispose()
+    with pytest.raises(RuntimeError, match="migration checksum mismatch"):
+        MemoryService(postgres_url)
+
+
+def test_explicit_psycopg_url_uses_postgres_adapter(postgres_url):
+    service = MemoryService(postgres_url.replace("postgresql://", "postgresql+psycopg://", 1))
+    try:
+        assert service.health()["ok"] is True
+        assert service.database.__class__.__name__ == "PostgresDatabase"
+    finally:
+        service.close()
