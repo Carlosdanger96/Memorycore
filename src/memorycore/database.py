@@ -410,6 +410,69 @@ class SQLiteDatabase:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
+    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read a consistent snapshot including the full audit and link history."""
+        with self._lock:
+            self.connection.execute("BEGIN")
+            try:
+                memories = [self._from_row(row) for row in self.connection.execute(
+                    "SELECT * FROM memories ORDER BY rowid"
+                )]
+                events = [{**dict(row), "details": json.loads(row["details"])}
+                          for row in self.connection.execute(
+                              "SELECT * FROM memory_events ORDER BY rowid"
+                          )]
+                links = [dict(row) for row in self.connection.execute(
+                    "SELECT * FROM memory_links ORDER BY rowid"
+                )]
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        return memories, events, links
+
+    def restore_records(self, memories: list[dict[str, Any]],
+                        events: list[dict[str, Any]], links: list[dict[str, Any]]) -> int:
+        """Restore a complete snapshot into an empty database atomically."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                for table in ("memories", "memory_events", "memory_links"):
+                    if self.connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                        raise ValueError("JSONL restore requires an empty Memorycore database")
+                for item in memories:
+                    self.connection.execute(
+                        """INSERT INTO memories (
+                            id, project_id, memory_type, content, summary, tags, status,
+                            created_by, updated_by, client_id, model_provider, model_name,
+                            session_id, source_type, source_uri, source_id, confidence,
+                            metadata, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (item["id"], item["project_id"], item["memory_type"], item["content"],
+                         item.get("summary"), json.dumps(item["tags"], ensure_ascii=False),
+                         item["status"], item.get("created_by"), item.get("updated_by"),
+                         item.get("client_id"), item.get("model_provider"), item.get("model_name"),
+                         item.get("session_id"), item["source_type"], item.get("source_uri"),
+                         item.get("source_id"), item.get("confidence"),
+                         json.dumps(item["metadata"], ensure_ascii=False),
+                         item["created_at"], item["updated_at"]),
+                    )
+                for event in events:
+                    self._insert_event(event)
+                for link in links:
+                    self.connection.execute(
+                        """INSERT INTO memory_links (
+                            id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (link["id"], link["from_memory_id"], link["to_memory_id"],
+                         link["relation_type"], link.get("created_by"), link["created_at"]),
+                    )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        return len(memories)
+
     def find_exact_active(self, project_id: str, memory_type: str, content: str) -> Memory | None:
         with self._lock:
             row = self.connection.execute("""SELECT * FROM memories

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -252,33 +254,67 @@ class MemoryService:
             raise RuntimeError("JSONL export is only available for the SQLite storage adapter")
         path = Path(destination).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        memories = self.database.all_memories()
-        with path.open("w", encoding="utf-8") as handle:
-            for memory in memories:
-                handle.write(json.dumps({"record_type": "memory", **memory.to_dict()}, ensure_ascii=False) + "\n")
-                for event in self.get_memory_history(memory.id):
-                    handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
+        memories, events, links = self.database.snapshot_records()
+        temporary = path.with_name(path.name + ".tmp-" + uuid4().hex)
+        digest = hashlib.sha256()
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                header = {"record_type": "manifest", "format": "memorycore-jsonl", "version": 2,
+                          "memory_count": len(memories), "event_count": len(events),
+                          "link_count": len(links)}
+                handle.write(json.dumps(header, ensure_ascii=False) + "\n")
+                for kind, records in (("memory", (memory.to_dict() for memory in memories)),
+                                      ("memory_event", events), ("memory_link", links)):
+                    for record in records:
+                        line = json.dumps({"record_type": kind, **record}, ensure_ascii=False) + "\n"
+                        handle.write(line)
+                        digest.update(line.encode("utf-8"))
+                handle.write(json.dumps({"record_type": "end", "sha256": digest.hexdigest()}) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return len(memories)
 
     def import_jsonl(self, source: str | Path) -> int:
         if not isinstance(self.database, SQLiteDatabase):
             raise RuntimeError("JSONL import is only available for the SQLite storage adapter")
-        imported = 0
+        memories: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        digest = hashlib.sha256()
         with Path(source).expanduser().open(encoding="utf-8") as handle:
+            header = json.loads(handle.readline())
+            if header.get("record_type") != "manifest" or header.get("format") != "memorycore-jsonl" or header.get("version") != 2:
+                raise ValueError("JSONL restore requires a version 2 Memorycore export")
+            trailer = None
             for line in handle:
                 record = json.loads(line)
-                if record.get("record_type") != "memory" or self.get_memory(record["id"]):
+                kind = record.pop("record_type", None)
+                if kind == "end":
+                    if trailer is not None:
+                        raise ValueError("duplicate JSONL end record")
+                    trailer = record
                     continue
-                self.add_memory(project_id=record["project_id"], memory_type=record["memory_type"],
-                    content=record["content"], summary=record.get("summary"), tags=record.get("tags"),
-                    created_by=record.get("created_by"), client_id=record.get("client_id"),
-                    model_provider=record.get("model_provider"), model_name=record.get("model_name"),
-                    session_id=record.get("session_id"), source_type=record.get("source_type", "manual_import"),
-                    source_uri=record.get("source_uri"), source_id=record.get("source_id"),
-                    confidence=record.get("confidence"), metadata=record.get("metadata"),
-                    status=record.get("status", "active"), memory_id=record["id"])
-                imported += 1
-        return imported
+                if trailer is not None:
+                    raise ValueError("records after JSONL end record")
+                digest.update(line.rstrip("\r\n").encode("utf-8") + b"\n")
+                if kind == "memory":
+                    memories.append(record)
+                elif kind == "memory_event":
+                    events.append(record)
+                elif kind == "memory_link":
+                    links.append(record)
+                else:
+                    raise ValueError(f"unknown JSONL record type: {kind}")
+        if trailer is None or trailer.get("sha256") != digest.hexdigest():
+            raise ValueError("JSONL export is incomplete or has changed")
+        if (len(memories), len(events), len(links)) != (
+            header.get("memory_count"), header.get("event_count"), header.get("link_count")
+        ):
+            raise ValueError("JSONL record counts do not match the manifest")
+        return self.database.restore_records(memories, events, links)
 
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,
