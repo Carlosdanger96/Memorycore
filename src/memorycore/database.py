@@ -365,7 +365,7 @@ class SQLiteDatabase:
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
             rows = self.connection.execute(
-                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY created_at ASC LIMIT ?",
+                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY rowid ASC LIMIT ?",
                 (memory_id, limit),
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
