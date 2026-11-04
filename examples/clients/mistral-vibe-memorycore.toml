@@ -1,8 +1,13 @@
-# Add to the Mistral Vibe MCP configuration. Replace the paths for this PC.
-[mcp_servers.memorycore]
-command = "C:\\PATH\\TO\\Memorycore\\.venv\\Scripts\\python.exe"
-args = ["-m", "memorycore.mcp_server"]
-env = { MEMORYCORE_DB = "C:\\PATH\\TO\\Memorycore\\data\\memorycore.db", MEMORYCORE_CLIENT_ID = "mistral-vibe", MEMORYCORE_CLIENT_ROLE = "writer", MEMORYCORE_MODEL_PROVIDER = "mistral", MEMORYCORE_MODEL_NAME = "vibe" }
-default_tools_approval_mode = "prompt"
-startup_timeout_sec = 20
+# Append to Vibe's config.toml. Supply the token in the process environment.
+# Use a distinct writer token in Memorycore's private HTTP client registry.
+[[mcp_servers]]
+name = "memorycore"
+transport = "streamable-http"
+url = "http://127.0.0.1:8000/mcp"
+startup_timeout_sec = 15
 tool_timeout_sec = 60
+
+[mcp_servers.auth]
+type = "static"
+api_key_env = "MEMORYCORE_VIBE_TOKEN"
+api_key_format = "Bearer {token}"

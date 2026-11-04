@@ -1,17 +1,23 @@
 # Local MCP Client Integration
 
-The local prototype uses two separate stdio MCP server processes that point to
-the same SQLite database. Each process has a server-assigned identity and role.
+The legacy local prototype uses two separate stdio MCP server processes that
+point to the same SQLite database. The central-service target is one HTTP MCP
+process that owns the database; Vibe and Hermes connect with separate tokens.
+The server assigns each client's identity and role.
 
 | Client | Role | Purpose |
 | --- | --- | --- |
 | Mistral Vibe | `writer` | Adds pending memories and updates its own pending records. |
 | Hermes | `approver` | Reviews, approves, corrects, and supersedes project memory. |
 
-Copy the Mistral configuration from
-`examples/clients/mistral-vibe-memorycore.toml` and configure Hermes with
-`examples/clients/hermes-memorycore.env`. Both must use the same
-`MEMORYCORE_DB` path.
+Append the current Vibe example from
+`examples/clients/mistral-vibe-memorycore.toml` to an isolated Vibe configuration.
+For Hermes, merge
+`examples/clients/hermes-memorycore.yaml.example` into a private test config
+and replace its placeholder with a distinct token from the private registry.
+Both clients use the same URL and never open the
+database file. Keep live Omni client settings unchanged until Memorycore's
+release gates pass.
 
 The automated `test_cross_client.py` test validates the same MCP protocol
 workflow without requiring either desktop application to be installed:

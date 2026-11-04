@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
+import os
+import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,17 +15,31 @@ from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
 )
-from .retrieval import build_fts_query, rank_memories, render_context
+from .retrieval import build_fts_query, build_fts_query_or, rank_memories, render_context
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _audit_identifier(value: str | None) -> str | None:
+    if value and len(value) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+        return value
+    return None
+
+
+# Query ceilings (2026-10-12: raised from 100/100). These bound how many rows a
+# single query may return/consider — they are NOT storage caps. The candidate
+# pool scales 5x with the requested limit so the ranker sees every relevant row
+# as the store grows; _MAX_CANDIDATE_POOL is the absolute ceiling on that pool.
+_MAX_QUERY_LIMIT = 1000
+_MAX_CANDIDATE_POOL = 5000
+
+
 class MemoryService:
     def __init__(self, database_path: str | Path) -> None:
         database_target = str(database_path)
-        self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgres://")) else SQLiteDatabase(database_path)
+        self.database = PostgresDatabase(database_target) if database_target.startswith(("postgresql://", "postgresql+psycopg://", "postgres://")) else SQLiteDatabase(database_path)
         self.database.initialize()
 
     def close(self) -> None:
@@ -69,17 +86,26 @@ class MemoryService:
     def search_memory(self, *, query: str, project_id: str, limit: int = 10,
                       memory_type: str | None = None,
                       status: str = MemoryStatus.ACTIVE.value) -> list[Memory]:
-        if limit < 1 or limit > 100:
-            raise ValueError("limit must be between 1 and 100")
+        if limit < 1 or limit > _MAX_QUERY_LIMIT:
+            raise ValueError(f"limit must be between 1 and {_MAX_QUERY_LIMIT}")
         if memory_type is not None:
             memory_type = validate_memory_type(memory_type)
         status = validate_status(status)
         fts_query = build_fts_query(query)
-        candidate_limit = min(100, max(25, limit * 5))
+        # Candidate pool scales with the requested limit (5x) so the ranker can
+        # consider every relevant row as the store grows; previously hard-capped
+        # at 100, which silently hid rows past that point (2026-10-12 fix).
+        candidate_limit = min(_MAX_CANDIDATE_POOL, max(25, limit * 5))
         if not fts_query:
             memories = self.database.list_recent(project_id.strip(), candidate_limit, status)
         else:
             memories = self.database.search(fts_query, project_id.strip(), candidate_limit, memory_type, status)
+            if not memories and isinstance(self.database, SQLiteDatabase):
+                # AND query matched nothing — retry with OR so a multi-word
+                # query with one absent term still returns the best partials.
+                or_query = build_fts_query_or(query)
+                if or_query and or_query != fts_query:
+                    memories = self.database.search(or_query, project_id.strip(), candidate_limit, memory_type, status)
         if status == MemoryStatus.ACTIVE.value and query.strip() and isinstance(self.database, SQLiteDatabase):
             exact = self.database.find_exact_active_any(project_id.strip(), query)
             if exact is not None and all(item.id != exact.id for item in memories):
@@ -90,6 +116,33 @@ class MemoryService:
         if not isinstance(self.database, SQLiteDatabase):
             return None
         return self.database.find_exact_active(project_id.strip(), validate_memory_type(memory_type), content.strip())
+
+    def duplicate_candidates(self, *, project_id: str, content: str,
+                             exclude_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        return self.database.duplicate_candidates(project_id.strip(), content.strip(), exclude_id)[:limit]
+
+    def link_memories(self, *, from_memory_id: str, to_memory_id: str,
+                      relation_type: str, created_by: str | None = None) -> None:
+        """Record a supersedes/corrects/contradicts relationship between two
+        memories. Idempotent (UNIQUE constraint). Validates relation_type and
+        that both memories exist; raises ValueError otherwise."""
+        if relation_type not in {"supersedes", "corrects", "contradicts"}:
+            raise ValueError("relation_type must be one of: supersedes, corrects, contradicts")
+        if from_memory_id == to_memory_id:
+            raise ValueError("cannot link a memory to itself")
+        if self.get_memory(from_memory_id) is None:
+            raise ValueError("from_memory not found")
+        if self.get_memory(to_memory_id) is None:
+            raise ValueError("to_memory not found")
+        self.database.add_link(
+            from_memory_id=from_memory_id, to_memory_id=to_memory_id,
+            relation_type=relation_type, created_by=created_by, created_at=_now())
+
+    def get_memory_links(self, memory_id: str) -> list[dict[str, Any]]:
+        """All links touching a memory (both directions)."""
+        return self.database.list_links(memory_id)
 
     def retrieve_context(self, *, query: str, project_id: str, limit: int = 10,
                          memory_type: str | None = None,
@@ -160,8 +213,6 @@ class MemoryService:
     def _replace_memory(self, memory_id: str, *, content: str, updated_by: str,
                         summary: str | None, tags: list[str] | None,
                         relation_type: str, original_status: str) -> Memory:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("atomic replacement is currently available for SQLite")
         original = self.get_memory(memory_id)
         if original is None:
             raise ValueError("memory not found")
@@ -191,10 +242,34 @@ class MemoryService:
     def health(self) -> dict[str, Any]:
         return self.database.health()
 
+    def checkpoint(self) -> dict[str, Any]:
+        """WAL checkpoint (TRUNCATE). Call after bulk writes/syncs so the -wal
+        file does not grow unbounded and file-copy backups capture recent state.
+        Returns the (busy, log_frames, checkpointed_frames) pragma result."""
+        if not isinstance(self.database, SQLiteDatabase):
+            return {"ok": False, "reason": "checkpoint is SQLite-only"}
+        return self.database.checkpoint()
+
     def get_memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         if limit < 1 or limit > 500:
             raise ValueError("limit must be between 1 and 500")
         return self.database.list_events(memory_id, limit)
+
+    def record_access_denial(self, *, client_id: str | None, operation: str,
+                             project_id: str | None = None, memory_id: str | None = None,
+                             reason: str) -> None:
+        self.database.record_access_denial({
+            "id": str(uuid4()), "client_id": _audit_identifier(client_id),
+            "operation": operation, "project_id": _audit_identifier(project_id),
+            "memory_id": _audit_identifier(memory_id), "reason": reason,
+            "created_at": _now(),
+        })
+
+    def get_access_denials(self, *, project_id: str | None = None,
+                           limit: int = 100) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        return self.database.list_access_denials(project_id, limit)
 
     def backup(self, destination: str | Path) -> None:
         if not isinstance(self.database, SQLiteDatabase):
@@ -202,37 +277,72 @@ class MemoryService:
         self.database.backup_to(destination)
 
     def export_jsonl(self, destination: str | Path) -> int:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("JSONL export is only available for the SQLite storage adapter")
         path = Path(destination).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        memories = self.database.all_memories()
-        with path.open("w", encoding="utf-8") as handle:
-            for memory in memories:
-                handle.write(json.dumps({"record_type": "memory", **memory.to_dict()}, ensure_ascii=False) + "\n")
-                for event in self.get_memory_history(memory.id):
-                    handle.write(json.dumps({"record_type": "memory_event", **event}, ensure_ascii=False) + "\n")
+        memories, events, links, access_events = self.database.snapshot_records()
+        temporary = path.with_name(path.name + ".tmp-" + uuid4().hex)
+        digest = hashlib.sha256()
+        try:
+            with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+                header = {"record_type": "manifest", "format": "memorycore-jsonl", "version": 2,
+                          "memory_count": len(memories), "event_count": len(events),
+                          "link_count": len(links), "access_event_count": len(access_events)}
+                handle.write(json.dumps(header, ensure_ascii=False) + "\n")
+                for kind, records in (("memory", (memory.to_dict() for memory in memories)),
+                                      ("memory_event", events), ("memory_link", links),
+                                      ("access_event", access_events)):
+                    for record in records:
+                        line = json.dumps({"record_type": kind, **record}, ensure_ascii=False) + "\n"
+                        handle.write(line)
+                        digest.update(line.encode("utf-8"))
+                handle.write(json.dumps({"record_type": "end", "sha256": digest.hexdigest()}) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return len(memories)
 
     def import_jsonl(self, source: str | Path) -> int:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("JSONL import is only available for the SQLite storage adapter")
-        imported = 0
+        memories: list[dict[str, Any]] = []
+        events: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        access_events: list[dict[str, Any]] = []
+        digest = hashlib.sha256()
         with Path(source).expanduser().open(encoding="utf-8") as handle:
+            header = json.loads(handle.readline())
+            if header.get("record_type") != "manifest" or header.get("format") != "memorycore-jsonl" or header.get("version") != 2:
+                raise ValueError("JSONL restore requires a version 2 Memorycore export")
+            trailer = None
             for line in handle:
                 record = json.loads(line)
-                if record.get("record_type") != "memory" or self.get_memory(record["id"]):
+                kind = record.pop("record_type", None)
+                if kind == "end":
+                    if trailer is not None:
+                        raise ValueError("duplicate JSONL end record")
+                    trailer = record
                     continue
-                self.add_memory(project_id=record["project_id"], memory_type=record["memory_type"],
-                    content=record["content"], summary=record.get("summary"), tags=record.get("tags"),
-                    created_by=record.get("created_by"), client_id=record.get("client_id"),
-                    model_provider=record.get("model_provider"), model_name=record.get("model_name"),
-                    session_id=record.get("session_id"), source_type=record.get("source_type", "manual_import"),
-                    source_uri=record.get("source_uri"), source_id=record.get("source_id"),
-                    confidence=record.get("confidence"), metadata=record.get("metadata"),
-                    status=record.get("status", "active"), memory_id=record["id"])
-                imported += 1
-        return imported
+                if trailer is not None:
+                    raise ValueError("records after JSONL end record")
+                digest.update(line.rstrip("\r\n").encode("utf-8") + b"\n")
+                if kind == "memory":
+                    memories.append(record)
+                elif kind == "memory_event":
+                    events.append(record)
+                elif kind == "memory_link":
+                    links.append(record)
+                elif kind == "access_event":
+                    access_events.append(record)
+                else:
+                    raise ValueError(f"unknown JSONL record type: {kind}")
+        if trailer is None or trailer.get("sha256") != digest.hexdigest():
+            raise ValueError("JSONL export is incomplete or has changed")
+        if (len(memories), len(events), len(links), len(access_events)) != (
+            header.get("memory_count"), header.get("event_count"),
+            header.get("link_count"), header.get("access_event_count", 0)
+        ):
+            raise ValueError("JSONL record counts do not match the manifest")
+        return self.database.restore_records(memories, events, links, access_events)
 
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,

@@ -67,7 +67,10 @@ def test_sqlite_backup_and_jsonl_export(tmp_path):
     assert restored.get_memory(memory.id) is not None
     restored.close()
     lines = exported.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 3 and '"record_type": "memory_event"' in lines[1]
+    assert len(lines) == 5
+    assert '"record_type": "manifest"' in lines[0]
+    assert '"record_type": "memory_event"' in lines[2]
+    assert '"record_type": "end"' in lines[-1]
     imported = MemoryService(tmp_path / "imported.db")
     assert imported.import_jsonl(exported) == 1
     assert imported.get_memory(memory.id) is not None
@@ -100,5 +103,6 @@ def test_retrieval_uses_candidate_pool_and_exact_summary(tmp_path):
     results = service.search_memory(query="shared token", project_id="alpha", limit=1)
     assert results[0].id == exact.id
     plan = service.database.connection.execute("EXPLAIN QUERY PLAN SELECT * FROM memories WHERE project_id='alpha' AND status='active' ORDER BY updated_at DESC").fetchall()
-    assert any("idx_memories_active_project_updated" in row[3] for row in plan)
+    assert any("idx_memories_project_status_updated" in row[3] for row in plan)
+    assert not any("TEMP B-TREE" in row[3] for row in plan)
     service.close()
