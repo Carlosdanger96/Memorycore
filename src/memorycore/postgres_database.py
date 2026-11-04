@@ -8,6 +8,7 @@ MemoryService. MCP clients never select a database engine or connect to it.
 
 import json
 from typing import Any
+from uuid import uuid4
 
 from .models import Memory
 
@@ -115,6 +116,30 @@ class PostgresDatabase:
         with self.engine.connect() as connection:
             rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY created_at ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
         return [dict(row) for row in rows]
+
+    def add_link(self, *, from_memory_id: str, to_memory_id: str,
+                 relation_type: str, created_by: str | None, created_at: str) -> None:
+        from sqlalchemy import text
+        with self.engine.begin() as connection:
+            connection.execute(text("""INSERT INTO memory_links (id, from_memory_id, to_memory_id,
+                relation_type, created_by, created_at) VALUES (:id, :from_memory_id, :to_memory_id,
+                :relation_type, :created_by, :created_at) ON CONFLICT DO NOTHING"""),
+                {"id": str(uuid4()), "from_memory_id": from_memory_id,
+                 "to_memory_id": to_memory_id, "relation_type": relation_type,
+                 "created_by": created_by, "created_at": created_at})
+
+    def list_links(self, memory_id: str) -> list[dict[str, Any]]:
+        from sqlalchemy import text
+        with self.engine.connect() as connection:
+            rows = connection.execute(text("""SELECT * FROM memory_links
+                WHERE from_memory_id=:id OR to_memory_id=:id ORDER BY created_at ASC"""),
+                {"id": memory_id}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def checkpoint(self) -> dict[str, Any]:
+        # WAL checkpointing is a SQLite concept; PostgreSQL checkpoints itself.
+        return {"ok": True, "busy": False, "log_frames": None, "checkpointed_frames": None,
+                "note": "PostgreSQL manages its own WAL; no-op"}
 
     @staticmethod
     def _insert_event(connection: Any, event: dict[str, Any]) -> None:

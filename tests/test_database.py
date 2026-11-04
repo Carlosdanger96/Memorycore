@@ -100,5 +100,6 @@ def test_retrieval_uses_candidate_pool_and_exact_summary(tmp_path):
     results = service.search_memory(query="shared token", project_id="alpha", limit=1)
     assert results[0].id == exact.id
     plan = service.database.connection.execute("EXPLAIN QUERY PLAN SELECT * FROM memories WHERE project_id='alpha' AND status='active' ORDER BY updated_at DESC").fetchall()
-    assert any("idx_memories_active_project_updated" in row[3] for row in plan)
+    assert any("idx_memories_project_status_updated" in row[3] for row in plan)
+    assert not any("TEMP B-TREE" in row[3] for row in plan)
     service.close()

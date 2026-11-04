@@ -12,11 +12,19 @@ from .models import (
     Memory, MemoryStatus, SourceType, validate_confidence, validate_memory_type,
     validate_source_type, validate_status, validate_status_transition,
 )
-from .retrieval import build_fts_query, rank_memories, render_context
+from .retrieval import build_fts_query, build_fts_query_or, rank_memories, render_context
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Query ceilings (2026-10-12: raised from 100/100). These bound how many rows a
+# single query may return/consider — they are NOT storage caps. The candidate
+# pool scales 5x with the requested limit so the ranker sees every relevant row
+# as the store grows; _MAX_CANDIDATE_POOL is the absolute ceiling on that pool.
+_MAX_QUERY_LIMIT = 1000
+_MAX_CANDIDATE_POOL = 5000
 
 
 class MemoryService:
@@ -69,17 +77,26 @@ class MemoryService:
     def search_memory(self, *, query: str, project_id: str, limit: int = 10,
                       memory_type: str | None = None,
                       status: str = MemoryStatus.ACTIVE.value) -> list[Memory]:
-        if limit < 1 or limit > 100:
-            raise ValueError("limit must be between 1 and 100")
+        if limit < 1 or limit > _MAX_QUERY_LIMIT:
+            raise ValueError(f"limit must be between 1 and {_MAX_QUERY_LIMIT}")
         if memory_type is not None:
             memory_type = validate_memory_type(memory_type)
         status = validate_status(status)
         fts_query = build_fts_query(query)
-        candidate_limit = min(100, max(25, limit * 5))
+        # Candidate pool scales with the requested limit (5x) so the ranker can
+        # consider every relevant row as the store grows; previously hard-capped
+        # at 100, which silently hid rows past that point (2026-10-12 fix).
+        candidate_limit = min(_MAX_CANDIDATE_POOL, max(25, limit * 5))
         if not fts_query:
             memories = self.database.list_recent(project_id.strip(), candidate_limit, status)
         else:
             memories = self.database.search(fts_query, project_id.strip(), candidate_limit, memory_type, status)
+            if not memories and isinstance(self.database, SQLiteDatabase):
+                # AND query matched nothing — retry with OR so a multi-word
+                # query with one absent term still returns the best partials.
+                or_query = build_fts_query_or(query)
+                if or_query and or_query != fts_query:
+                    memories = self.database.search(or_query, project_id.strip(), candidate_limit, memory_type, status)
         if status == MemoryStatus.ACTIVE.value and query.strip() and isinstance(self.database, SQLiteDatabase):
             exact = self.database.find_exact_active_any(project_id.strip(), query)
             if exact is not None and all(item.id != exact.id for item in memories):
@@ -90,6 +107,27 @@ class MemoryService:
         if not isinstance(self.database, SQLiteDatabase):
             return None
         return self.database.find_exact_active(project_id.strip(), validate_memory_type(memory_type), content.strip())
+
+    def link_memories(self, *, from_memory_id: str, to_memory_id: str,
+                      relation_type: str, created_by: str | None = None) -> None:
+        """Record a supersedes/corrects/contradicts relationship between two
+        memories. Idempotent (UNIQUE constraint). Validates relation_type and
+        that both memories exist; raises ValueError otherwise."""
+        if relation_type not in {"supersedes", "corrects", "contradicts"}:
+            raise ValueError("relation_type must be one of: supersedes, corrects, contradicts")
+        if from_memory_id == to_memory_id:
+            raise ValueError("cannot link a memory to itself")
+        if self.get_memory(from_memory_id) is None:
+            raise ValueError("from_memory not found")
+        if self.get_memory(to_memory_id) is None:
+            raise ValueError("to_memory not found")
+        self.database.add_link(
+            from_memory_id=from_memory_id, to_memory_id=to_memory_id,
+            relation_type=relation_type, created_by=created_by, created_at=_now())
+
+    def get_memory_links(self, memory_id: str) -> list[dict[str, Any]]:
+        """All links touching a memory (both directions)."""
+        return self.database.list_links(memory_id)
 
     def retrieve_context(self, *, query: str, project_id: str, limit: int = 10,
                          memory_type: str | None = None,
@@ -190,6 +228,14 @@ class MemoryService:
 
     def health(self) -> dict[str, Any]:
         return self.database.health()
+
+    def checkpoint(self) -> dict[str, Any]:
+        """WAL checkpoint (TRUNCATE). Call after bulk writes/syncs so the -wal
+        file does not grow unbounded and file-copy backups capture recent state.
+        Returns the (busy, log_frames, checkpointed_frames) pragma result."""
+        if not isinstance(self.database, SQLiteDatabase):
+            return {"ok": False, "reason": "checkpoint is SQLite-only"}
+        return self.database.checkpoint()
 
     def get_memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         if limit < 1 or limit > 500:

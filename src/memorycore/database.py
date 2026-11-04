@@ -47,6 +47,10 @@ ON memories(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_memories_project_type
 ON memories(project_id, memory_type);
 
+-- Covering index for list_recent (project + status filter, recency order).
+CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated
+ON memories(project_id, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -121,7 +125,7 @@ class SQLiteDatabase:
             self.connection.commit()
 
     def _apply_migrations(self) -> None:
-        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';")]
+        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';"), (3, "list_recent_covering_index", "CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated ON memories(project_id, status, updated_at DESC);")]
         applied = {row[0]: row[1] for row in self.connection.execute("SELECT version, checksum FROM schema_migrations")}
         for version, name, sql in migrations:
             checksum = sql if version == 1 else hashlib.sha256(sql.encode()).hexdigest()
@@ -135,16 +139,17 @@ class SQLiteDatabase:
             self.connection.executescript("BEGIN IMMEDIATE; " + sql + " INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (" + str(version) + ", '" + name + "', '" + checksum + "', datetime('now')); COMMIT;")
 
     def _upgrade_status_constraint(self) -> None:
-        """Rebuild the v0.1 table when its CHECK constraint lacks new statuses.
+        """Rebuild the v0.1 table when its CHECK constraint lacks new statuses OR types.
 
         SQLite cannot alter a CHECK constraint in place. This keeps databases
-        created before pending/rejected/contradicted existed usable without a
-        manual export/import step.
+        created before pending/rejected/contradicted (and the observation
+        memory_type) existed usable without a manual export/import step.
         """
         sql = self.connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memories'"
         ).fetchone()[0]
-        if "'pending'" in sql:
+        needs_rebuild = "'pending'" not in sql or "'observation'" not in sql
+        if not needs_rebuild:
             return
         try:
             self.connection.executescript("""
@@ -161,7 +166,7 @@ class SQLiteDatabase:
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
                 memory_type TEXT NOT NULL CHECK (
-                    memory_type IN ('fact','decision','preference','procedure','correction','note')
+                    memory_type IN ('fact','decision','preference','procedure','correction','observation','note')
                 ),
                 content TEXT NOT NULL,
                 summary TEXT,
@@ -195,6 +200,8 @@ class SQLiteDatabase:
             ON memories(project_id, status);
             CREATE INDEX IF NOT EXISTS idx_memories_project_type
             ON memories(project_id, memory_type);
+            CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated
+            ON memories(project_id, status, updated_at DESC);
             CREATE TABLE memory_events (
                 id TEXT PRIMARY KEY,
                 memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -261,6 +268,30 @@ class SQLiteDatabase:
     def close(self) -> None:
         with self._lock:
             self.connection.close()
+
+    def add_link(self, *, from_memory_id: str, to_memory_id: str,
+                 relation_type: str, created_by: str | None, created_at: str) -> None:
+        """Insert a supersedes/corrects/contradicts link. Idempotent: the UNIQUE
+        constraint on (from, to, relation_type) makes a replay a no-op."""
+        with self._lock:
+            self.connection.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (id, from_memory_id, to_memory_id, relation_type, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (str(__import__("uuid").uuid4()), from_memory_id, to_memory_id,
+                 relation_type, created_by, created_at),
+            )
+            self.connection.commit()
+
+    def list_links(self, memory_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT * FROM memory_links
+                   WHERE from_memory_id = ? OR to_memory_id = ?
+                   ORDER BY created_at ASC""",
+                (memory_id, memory_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
         with self._lock:
@@ -364,6 +395,10 @@ class SQLiteDatabase:
 
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
+            # Order by rowid (insertion order), not id: event ids are random
+            # UUIDs, so a same-timestamp tie-break on id is non-deterministic.
+            # created_at alone is also insufficient — two events in one
+            # transaction share the same microsecond timestamp.
             rows = self.connection.execute(
                 "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY rowid ASC LIMIT ?",
                 (memory_id, limit),
@@ -438,6 +473,17 @@ class SQLiteDatabase:
             self.connection.execute("SELECT rowid FROM memory_fts LIMIT 1").fetchone()
         return {"ok": True, "database": str(self.path), "memory_count": int(count),
                 "sqlite_version": sqlite3.sqlite_version, "fts5": True}
+
+    def checkpoint(self) -> dict[str, Any]:
+        """TRUNCATE checkpoint: fold the WAL back into the main DB file.
+
+        Keeps the -wal file from growing unbounded under sync churn and makes
+        plain file-copy backups capture all committed state."""
+        with self._lock:
+            row = self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        busy, log_frames, checkpointed = (row[0], row[1], row[2]) if row else (None, None, None)
+        return {"ok": True, "busy": bool(busy), "log_frames": log_frames,
+                "checkpointed_frames": checkpointed}
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> Memory:
