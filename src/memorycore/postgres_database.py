@@ -134,6 +134,53 @@ class PostgresDatabase:
             rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY event_order ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
         return [{key: value for key, value in row.items() if key != "event_order"} for row in rows]
 
+    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]]]:
+        from sqlalchemy import text
+
+        with self.engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
+            memories = [self._from_row(row) for row in connection.execute(
+                text("SELECT * FROM memories ORDER BY id")
+            ).mappings().all()]
+            events = [{key: value for key, value in row.items() if key != "event_order"}
+                      for row in connection.execute(
+                          text("SELECT * FROM memory_events ORDER BY event_order")
+                      ).mappings().all()]
+            links = [dict(row) for row in connection.execute(
+                text("SELECT * FROM memory_links ORDER BY id")
+            ).mappings().all()]
+        return memories, events, links
+
+    def restore_records(self, memories: list[dict[str, Any]],
+                        events: list[dict[str, Any]], links: list[dict[str, Any]]) -> int:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            for table in ("memories", "memory_events", "memory_links"):
+                if connection.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first():
+                    raise ValueError("JSONL restore requires an empty Memorycore database")
+            for item in memories:
+                connection.execute(text("""INSERT INTO memories (
+                    id, project_id, memory_type, content, summary, tags, status,
+                    created_by, updated_by, client_id, model_provider, model_name,
+                    session_id, source_type, source_uri, source_id, confidence,
+                    metadata, created_at, updated_at
+                ) VALUES (
+                    :id, :project_id, :memory_type, :content, :summary,
+                    CAST(:tags AS jsonb), :status, :created_by, :updated_by,
+                    :client_id, :model_provider, :model_name, :session_id,
+                    :source_type, :source_uri, :source_id, :confidence,
+                    CAST(:metadata AS jsonb), :created_at, :updated_at
+                )"""), {**item, "tags": json.dumps(item["tags"]),
+                         "metadata": json.dumps(item["metadata"])})
+            for event in events:
+                self._insert_event(connection, event)
+            for link in links:
+                connection.execute(text("""INSERT INTO memory_links (
+                    id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+                ) VALUES (:id, :from_memory_id, :to_memory_id, :relation_type,
+                          :created_by, :created_at)"""), link)
+        return len(memories)
+
     def replace_memory(self, original: Memory, replacement: dict[str, Any], *,
                        relation_type: str, original_status: str,
                        original_event: dict[str, Any],

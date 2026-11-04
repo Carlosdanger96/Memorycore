@@ -95,3 +95,33 @@ def test_postgres_concurrent_exact_writes(postgres_url):
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(lambda _: write(), range(2))) == ["blocked", "created"]
+
+
+def test_postgres_jsonl_recovery_preserves_relationships(postgres_url, tmp_path):
+    from sqlalchemy import text
+
+    service = MemoryService(postgres_url)
+    first = service.add_memory(
+        project_id="alpha", memory_type="fact", content="Source fact"
+    )
+    replacement = service.correct_memory(
+        first.id, content="Corrected source fact", updated_by="reviewer"
+    )
+    before = service.database.snapshot_records()
+    export = tmp_path / "postgres.jsonl"
+    assert service.export_jsonl(export) == 2
+    service.close()
+
+    # Only the disposable test database is cleared. The versioned JSONL file
+    # then exercises the same restore contract as SQLite.
+    service = MemoryService(postgres_url)
+    with service.database.engine.begin() as connection:
+        connection.execute(text("DELETE FROM memory_links"))
+        connection.execute(text("DELETE FROM memory_events"))
+        connection.execute(text("DELETE FROM memories"))
+    assert service.import_jsonl(export) == 2
+    after = service.database.snapshot_records()
+    assert [item.to_dict() for item in after[0]] == [item.to_dict() for item in before[0]]
+    assert after[1:] == before[1:]
+    assert service.get_memory(replacement.id).status == "active"
+    service.close()

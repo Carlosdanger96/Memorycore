@@ -53,11 +53,13 @@ $url = "postgresql+psycopg://memorycore:change-me-before-sharing@127.0.0.1:5432/
 .\.venv\Scripts\memorycore.exe --database-url $url serve-http --host 127.0.0.1 --port 8000
 ```
 
-PostgreSQL still needs live integration validation before production use.
 The integration suite uses `MEMORYCORE_TEST_POSTGRES_URL` to create and remove
 its own disposable database. It checks project scoping, lifecycle, history,
-links, restart persistence, duplicate detection, and concurrent writes. The
+links, restart persistence, duplicate detection, concurrent writes, and JSONL
+recovery. The
 GitHub Actions workflow runs this suite against a temporary PostgreSQL service.
+JSONL export/import works on both storage adapters; for a PostgreSQL deployment,
+also retain database-native backups under the operator's recovery policy.
 
 ## Safety boundary
 

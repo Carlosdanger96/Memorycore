@@ -254,8 +254,6 @@ class MemoryService:
         self.database.backup_to(destination)
 
     def export_jsonl(self, destination: str | Path) -> int:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("JSONL export is only available for the SQLite storage adapter")
         path = Path(destination).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         memories, events, links = self.database.snapshot_records()
@@ -282,8 +280,6 @@ class MemoryService:
         return len(memories)
 
     def import_jsonl(self, source: str | Path) -> int:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("JSONL import is only available for the SQLite storage adapter")
         memories: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         links: list[dict[str, Any]] = []
