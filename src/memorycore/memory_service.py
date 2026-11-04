@@ -114,8 +114,6 @@ class MemoryService:
                              exclude_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
         if limit < 1 or limit > 100:
             raise ValueError("limit must be between 1 and 100")
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("duplicate detection is not yet available for PostgreSQL")
         return self.database.duplicate_candidates(project_id.strip(), content.strip(), exclude_id)[:limit]
 
     def link_memories(self, *, from_memory_id: str, to_memory_id: str,
@@ -208,8 +206,6 @@ class MemoryService:
     def _replace_memory(self, memory_id: str, *, content: str, updated_by: str,
                         summary: str | None, tags: list[str] | None,
                         relation_type: str, original_status: str) -> Memory:
-        if not isinstance(self.database, SQLiteDatabase):
-            raise RuntimeError("atomic replacement is currently available for SQLite")
         original = self.get_memory(memory_id)
         if original is None:
             raise ValueError("memory not found")

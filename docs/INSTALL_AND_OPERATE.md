@@ -54,6 +54,10 @@ $url = "postgresql+psycopg://memorycore:change-me-before-sharing@127.0.0.1:5432/
 ```
 
 PostgreSQL still needs live integration validation before production use.
+The integration suite uses `MEMORYCORE_TEST_POSTGRES_URL` to create and remove
+its own disposable database. It checks project scoping, lifecycle, history,
+links, restart persistence, duplicate detection, and concurrent writes. The
+GitHub Actions workflow runs this suite against a temporary PostgreSQL service.
 
 ## Safety boundary
 

@@ -4,11 +4,11 @@ import json
 import sqlite3
 import threading
 import hashlib
-import re
 from pathlib import Path
 from typing import Any
 
 from .models import Memory
+from .duplicates import find_candidates
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -408,35 +408,16 @@ class SQLiteDatabase:
                 raise
         return self.get(memory_id)
 
-    @staticmethod
-    def _normalized_content(content: str) -> str:
-        return " ".join(content.casefold().split())
-
     def duplicate_candidates(self, project_id: str, content: str,
                              exclude_id: str | None = None) -> list[dict[str, Any]]:
         """Deterministic same-project exact and high-overlap candidates."""
-        normalized = self._normalized_content(content)
-        tokens = set(re.findall(r"\w+", normalized))
         with self._lock:
             rows = self.connection.execute(
                 """SELECT id, content FROM memories
                    WHERE project_id = ? AND status = 'active' AND id != ?""",
                 (project_id, exclude_id or ""),
             ).fetchall()
-        matches = []
-        for row in rows:
-            candidate = self._normalized_content(row["content"])
-            if candidate == normalized:
-                matches.append({"memory_id": row["id"], "reason": "exact", "score": 1.0})
-                continue
-            other = set(re.findall(r"\w+", candidate))
-            if min(len(tokens), len(other)) < 4:
-                continue
-            overlap = len(tokens & other) / len(tokens | other)
-            if overlap >= 0.8:
-                matches.append({"memory_id": row["id"], "reason": "probable",
-                                "score": round(overlap, 4)})
-        return sorted(matches, key=lambda item: (-item["score"], item["memory_id"]))
+        return find_candidates(rows, content)
 
     def _reject_duplicate(self, project_id: str, content: str,
                           exclude_id: str | None = None) -> None:

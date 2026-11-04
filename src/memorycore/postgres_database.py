@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from .models import Memory
+from .duplicates import find_candidates
 
 
 class PostgresDatabase:
@@ -45,9 +46,19 @@ class PostgresDatabase:
             connection.execute(text("""CREATE TABLE IF NOT EXISTS memory_events (
                 id TEXT PRIMARY KEY, memory_id TEXT NOT NULL REFERENCES memories(id), project_id TEXT NOT NULL,
                 event_type TEXT NOT NULL, client_id TEXT, previous_state TEXT, new_state TEXT,
-                details JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TEXT NOT NULL
+                details JSONB NOT NULL DEFAULT '{}'::jsonb, created_at TEXT NOT NULL,
+                event_order BIGINT GENERATED ALWAYS AS IDENTITY
             )"""))
+            connection.execute(text("ALTER TABLE memory_events ADD COLUMN IF NOT EXISTS event_order BIGSERIAL"))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_memory_events_memory_created ON memory_events(memory_id, created_at DESC)"))
+            connection.execute(text("""CREATE TABLE IF NOT EXISTS memory_links (
+                id TEXT PRIMARY KEY,
+                from_memory_id TEXT NOT NULL REFERENCES memories(id),
+                to_memory_id TEXT NOT NULL REFERENCES memories(id),
+                relation_type TEXT NOT NULL CHECK (relation_type IN ('supersedes','corrects','contradicts')),
+                created_by TEXT, created_at TEXT NOT NULL,
+                UNIQUE(from_memory_id, to_memory_id, relation_type)
+            )"""))
 
     def close(self) -> None:
         self.engine.dispose()
@@ -55,6 +66,8 @@ class PostgresDatabase:
     def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
         from sqlalchemy import text
         with self.engine.begin() as connection:
+            if values["status"] == "active":
+                self._reject_duplicate(connection, values["project_id"], values["content"])
             connection.execute(text("""
                 INSERT INTO memories (id, project_id, memory_type, content, summary, tags, status,
                     created_by, updated_by, client_id, model_provider, model_name, session_id,
@@ -83,7 +96,7 @@ class PostgresDatabase:
             rows = connection.execute(text("""
                 SELECT * FROM memories
                 WHERE project_id = :project_id AND status = :status
-                  AND (:memory_type IS NULL OR memory_type = :memory_type)
+                  AND (CAST(:memory_type AS TEXT) IS NULL OR memory_type = :memory_type)
                   AND to_tsvector('simple', content || ' ' || COALESCE(summary, ''))
                       @@ plainto_tsquery('simple', :query)
                 ORDER BY updated_at DESC LIMIT :limit
@@ -104,6 +117,10 @@ class PostgresDatabase:
         from sqlalchemy import text
         params = {"id": memory_id, "content": values.get("content", current.content), "summary": values.get("summary", current.summary), "tags": json.dumps(values.get("tags", current.tags)), "status": values.get("status", current.status), "metadata": json.dumps(values.get("metadata", current.metadata)), "updated_at": values.get("updated_at", current.updated_at), "updated_by": values.get("updated_by", current.updated_by)}
         with self.engine.begin() as connection:
+            if params["status"] == "active" and (
+                current.status != "active" or params["content"] != current.content
+            ):
+                self._reject_duplicate(connection, current.project_id, params["content"], memory_id)
             connection.execute(text("""UPDATE memories SET content=:content, summary=:summary,
                 tags=CAST(:tags AS jsonb), status=:status, metadata=CAST(:metadata AS jsonb),
                 updated_at=:updated_at, updated_by=:updated_by WHERE id=:id"""), params)
@@ -114,8 +131,86 @@ class PostgresDatabase:
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         from sqlalchemy import text
         with self.engine.connect() as connection:
-            rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY created_at ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
-        return [dict(row) for row in rows]
+            rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY event_order ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
+        return [{key: value for key, value in row.items() if key != "event_order"} for row in rows]
+
+    def replace_memory(self, original: Memory, replacement: dict[str, Any], *,
+                       relation_type: str, original_status: str,
+                       original_event: dict[str, Any],
+                       replacement_event: dict[str, Any]) -> Memory:
+        """Create a replacement, retire its source, link, and audit in one transaction."""
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            self._project_write_lock(connection, replacement["project_id"])
+            locked = connection.execute(
+                text("SELECT status FROM memories WHERE id=:id FOR UPDATE"), {"id": original.id}
+            ).scalar_one_or_none()
+            if locked != "active":
+                raise ValueError("only active memories can be replaced")
+            self._reject_duplicate(
+                connection, replacement["project_id"], replacement["content"], original.id
+            )
+            connection.execute(text("""INSERT INTO memories (
+                id, project_id, memory_type, content, summary, tags, status,
+                created_by, updated_by, client_id, model_provider, model_name,
+                session_id, source_type, source_uri, source_id, confidence,
+                metadata, created_at, updated_at
+            ) VALUES (
+                :id, :project_id, :memory_type, :content, :summary,
+                CAST(:tags AS jsonb), :status, :created_by, :updated_by,
+                :client_id, :model_provider, :model_name, :session_id,
+                :source_type, :source_uri, :source_id, :confidence,
+                CAST(:metadata AS jsonb), :created_at, :updated_at
+            )"""), {**replacement, "tags": json.dumps(replacement["tags"]),
+                    "metadata": json.dumps(replacement["metadata"])})
+            connection.execute(text("""UPDATE memories SET status=:status,
+                updated_by=:updated_by, updated_at=:updated_at WHERE id=:id"""),
+                {"status": original_status, "updated_by": replacement["created_by"],
+                 "updated_at": replacement["updated_at"], "id": original.id})
+            connection.execute(text("""INSERT INTO memory_links (
+                id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+            ) VALUES (:id, :from_id, :to_id, :relation_type, :created_by, :created_at)"""),
+                {"id": str(uuid4()), "from_id": replacement["id"], "to_id": original.id,
+                 "relation_type": relation_type, "created_by": replacement["created_by"],
+                 "created_at": replacement["created_at"]})
+            self._insert_event(connection, original_event)
+            self._insert_event(connection, replacement_event)
+        memory = self.get(replacement["id"])
+        if memory is None:
+            raise RuntimeError("replacement memory could not be reloaded")
+        return memory
+
+    @staticmethod
+    def _project_write_lock(connection: Any, project_id: str) -> None:
+        from sqlalchemy import text
+
+        connection.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": project_id},
+        )
+
+    def _duplicate_candidates(self, connection: Any, project_id: str,
+                              content: str, exclude_id: str | None = None) -> list[dict[str, Any]]:
+        from sqlalchemy import text
+
+        rows = connection.execute(text("""SELECT id, content FROM memories
+            WHERE project_id=:project_id AND status='active' AND id<>:exclude_id"""),
+            {"project_id": project_id, "exclude_id": exclude_id or ""}).mappings().all()
+        return find_candidates(rows, content)
+
+    def duplicate_candidates(self, project_id: str, content: str,
+                             exclude_id: str | None = None) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            return self._duplicate_candidates(connection, project_id, content, exclude_id)
+
+    def _reject_duplicate(self, connection: Any, project_id: str,
+                          content: str, exclude_id: str | None = None) -> None:
+        self._project_write_lock(connection, project_id)
+        matches = self._duplicate_candidates(connection, project_id, content, exclude_id)
+        if matches:
+            first = matches[0]
+            raise ValueError(f"{first['reason']} duplicate memory exists: {first['memory_id']}")
 
     def add_link(self, *, from_memory_id: str, to_memory_id: str,
                  relation_type: str, created_by: str | None, created_at: str) -> None:
