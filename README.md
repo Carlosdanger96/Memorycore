@@ -37,6 +37,13 @@ Multiple LLM clients
 SQLite (local prototype) → PostgreSQL (shared production)
 ```
 
+This storage path is authoritative for standalone Memorycore records. The
+planned Omni Memory integration has a different authority: canonical Markdown
+notes, with SQLite search data rebuilt from those notes and other authoritative
+records. See [Design Decisions](docs/DESIGN_DECISIONS.md) and the
+[Roadmap](docs/ROADMAP.md) for the boundary and verification gates. Omni client
+integration starts after the Memorycore completion gates pass.
+
 The current release includes SQLite storage, audit history, lifecycle controls,
 deterministic retrieval, backup/export/import, and a central MCP service mode.
 

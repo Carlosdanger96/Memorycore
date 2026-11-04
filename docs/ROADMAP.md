@@ -5,8 +5,11 @@ durable memory service through a restart and recovery. The current build target
 is the central service in [Central Service Architecture](CENTRAL_SERVICE_ARCHITECTURE.md):
 clients use MCP; only Memorycore opens its database. This roadmap combines the
 release gates in the README, [Prototype Plan](PROTOTYPE_PLAN.md), and
-[SQLite Memory Design](SQLITE_MEMORY_DESIGN.md). Omni Memory integration follows
-this work and is outside these gates.
+[SQLite Memory Design](SQLITE_MEMORY_DESIGN.md). The standalone database is
+authoritative for standalone Memorycore records. Omni Memory's Markdown vault
+remains authoritative for Omni notes; its SQLite search data is rebuildable.
+The boundary is specified in [Design Decisions](DESIGN_DECISIONS.md). Omni
+integration follows completion of the Memorycore gates below.
 
 ## Local core
 
@@ -44,6 +47,24 @@ this work and is outside these gates.
 - [ ] Release documentation matches the deployed service and its security
   boundaries; tag only after every applicable gate above passes.
 
-As of 2026-11-03, the checkout has 29 passing local tests. The separately
-installed copy has additional uncommitted capabilities and passed 51 tests
-with 3 skipped. Neither result establishes the unchecked release gates.
+## Gate before Omni integration
+
+After the Memorycore gates above pass, verify the existing Omni adapter against
+the integration contract before changing client wiring:
+
+- [ ] One scoped retrieval interface returns canonical path/ID, source,
+  revision/hash, status, and explicit current or historical results.
+- [ ] Conflicting sources and stale imports cannot override a later reviewed
+  user correction; unresolved changes stay in review.
+- [ ] Every agent write route proposes a change to the existing review path;
+  approval compares the candidate and destination revisions before writing.
+- [ ] A disposable reviewed note is retrieved through both Hermes and
+  OpenClaw's real client paths after a restart.
+- [ ] Delete and rebuild a disposable SQLite index from Markdown and other
+  authoritative records; verify identity, provenance, status, relationships,
+  and current search results. Identify missing metadata before migration.
+- [ ] Measure optional CPU semantic search against lexical search on fixed
+  queries, including recall, abstention, latency, and memory use.
+
+The separately installed copy has additional uncommitted capabilities. A test
+count alone does not establish the unchecked release gates above.
