@@ -107,6 +107,10 @@ def test_postgres_jsonl_recovery_preserves_relationships(postgres_url, tmp_path)
     replacement = service.correct_memory(
         first.id, content="Corrected source fact", updated_by="reviewer"
     )
+    service.record_access_denial(
+        client_id="writer", operation="memory_search", project_id="beta",
+        reason="project_not_allowed",
+    )
     before = service.database.snapshot_records()
     export = tmp_path / "postgres.jsonl"
     assert service.export_jsonl(export) == 2
@@ -116,6 +120,7 @@ def test_postgres_jsonl_recovery_preserves_relationships(postgres_url, tmp_path)
     # then exercises the same restore contract as SQLite.
     service = MemoryService(postgres_url)
     with service.database.engine.begin() as connection:
+        connection.execute(text("DELETE FROM access_events"))
         connection.execute(text("DELETE FROM memory_links"))
         connection.execute(text("DELETE FROM memory_events"))
         connection.execute(text("DELETE FROM memories"))

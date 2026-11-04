@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -19,6 +20,12 @@ from .retrieval import build_fts_query, build_fts_query_or, rank_memories, rende
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _audit_identifier(value: str | None) -> str | None:
+    if value and len(value) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", value):
+        return value
+    return None
 
 
 # Query ceilings (2026-10-12: raised from 100/100). These bound how many rows a
@@ -248,6 +255,22 @@ class MemoryService:
             raise ValueError("limit must be between 1 and 500")
         return self.database.list_events(memory_id, limit)
 
+    def record_access_denial(self, *, client_id: str | None, operation: str,
+                             project_id: str | None = None, memory_id: str | None = None,
+                             reason: str) -> None:
+        self.database.record_access_denial({
+            "id": str(uuid4()), "client_id": _audit_identifier(client_id),
+            "operation": operation, "project_id": _audit_identifier(project_id),
+            "memory_id": _audit_identifier(memory_id), "reason": reason,
+            "created_at": _now(),
+        })
+
+    def get_access_denials(self, *, project_id: str | None = None,
+                           limit: int = 100) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        return self.database.list_access_denials(project_id, limit)
+
     def backup(self, destination: str | Path) -> None:
         if not isinstance(self.database, SQLiteDatabase):
             raise RuntimeError("SQLite backup is only available for the SQLite storage adapter")
@@ -256,17 +279,18 @@ class MemoryService:
     def export_jsonl(self, destination: str | Path) -> int:
         path = Path(destination).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
-        memories, events, links = self.database.snapshot_records()
+        memories, events, links, access_events = self.database.snapshot_records()
         temporary = path.with_name(path.name + ".tmp-" + uuid4().hex)
         digest = hashlib.sha256()
         try:
             with temporary.open("w", encoding="utf-8", newline="\n") as handle:
                 header = {"record_type": "manifest", "format": "memorycore-jsonl", "version": 2,
                           "memory_count": len(memories), "event_count": len(events),
-                          "link_count": len(links)}
+                          "link_count": len(links), "access_event_count": len(access_events)}
                 handle.write(json.dumps(header, ensure_ascii=False) + "\n")
                 for kind, records in (("memory", (memory.to_dict() for memory in memories)),
-                                      ("memory_event", events), ("memory_link", links)):
+                                      ("memory_event", events), ("memory_link", links),
+                                      ("access_event", access_events)):
                     for record in records:
                         line = json.dumps({"record_type": kind, **record}, ensure_ascii=False) + "\n"
                         handle.write(line)
@@ -283,6 +307,7 @@ class MemoryService:
         memories: list[dict[str, Any]] = []
         events: list[dict[str, Any]] = []
         links: list[dict[str, Any]] = []
+        access_events: list[dict[str, Any]] = []
         digest = hashlib.sha256()
         with Path(source).expanduser().open(encoding="utf-8") as handle:
             header = json.loads(handle.readline())
@@ -306,15 +331,18 @@ class MemoryService:
                     events.append(record)
                 elif kind == "memory_link":
                     links.append(record)
+                elif kind == "access_event":
+                    access_events.append(record)
                 else:
                     raise ValueError(f"unknown JSONL record type: {kind}")
         if trailer is None or trailer.get("sha256") != digest.hexdigest():
             raise ValueError("JSONL export is incomplete or has changed")
-        if (len(memories), len(events), len(links)) != (
-            header.get("memory_count"), header.get("event_count"), header.get("link_count")
+        if (len(memories), len(events), len(links), len(access_events)) != (
+            header.get("memory_count"), header.get("event_count"),
+            header.get("link_count"), header.get("access_event_count", 0)
         ):
             raise ValueError("JSONL record counts do not match the manifest")
-        return self.database.restore_records(memories, events, links)
+        return self.database.restore_records(memories, events, links, access_events)
 
     @staticmethod
     def _event(*, memory_id: str, project_id: str, event_type: str,

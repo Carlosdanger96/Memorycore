@@ -17,6 +17,10 @@ def test_jsonl_round_trip_preserves_history_links_and_search(tmp_path):
         project_id="beta", memory_type="fact", content="Private pending fact",
         status="pending", created_by="client-c",
     )
+    original.record_access_denial(
+        client_id="client-c", operation="memory_search", project_id="gamma",
+        reason="project_not_allowed",
+    )
     before = original.database.snapshot_records()
     export = tmp_path / "memorycore.jsonl"
     assert original.export_jsonl(export) == 3

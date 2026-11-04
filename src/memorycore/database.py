@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS memory_events (
 CREATE INDEX IF NOT EXISTS idx_memory_events_memory_created
 ON memory_events(memory_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS access_events (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    operation TEXT NOT NULL,
+    project_id TEXT,
+    memory_id TEXT,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_events_created
+ON access_events(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS memory_links (
     id TEXT PRIMARY KEY,
     from_memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -438,12 +451,37 @@ class SQLiteDatabase:
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
 
+    def record_access_denial(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            self.connection.execute(
+                """INSERT INTO access_events (
+                    id, client_id, operation, project_id, memory_id, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (event["id"], event.get("client_id"), event["operation"],
+                 event.get("project_id"), event.get("memory_id"), event["reason"],
+                 event["created_at"]),
+            )
+            self.connection.commit()
+
+    def list_access_denials(self, project_id: str | None, limit: int) -> list[dict[str, Any]]:
+        with self._lock:
+            if project_id is None:
+                rows = self.connection.execute(
+                    "SELECT * FROM access_events ORDER BY rowid DESC LIMIT ?", (limit,)
+                ).fetchall()
+            else:
+                rows = self.connection.execute(
+                    """SELECT * FROM access_events WHERE project_id = ?
+                       ORDER BY rowid DESC LIMIT ?""", (project_id, limit)
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def all_memories(self) -> list[Memory]:
         with self._lock:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
 
-    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]]]:
+    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """Read a consistent snapshot including the full audit and link history."""
         with self._lock:
             self.connection.execute("BEGIN")
@@ -458,19 +496,23 @@ class SQLiteDatabase:
                 links = [dict(row) for row in self.connection.execute(
                     "SELECT * FROM memory_links ORDER BY rowid"
                 )]
+                access_events = [dict(row) for row in self.connection.execute(
+                    "SELECT * FROM access_events ORDER BY rowid"
+                )]
                 self.connection.commit()
             except Exception:
                 self.connection.rollback()
                 raise
-        return memories, events, links
+        return memories, events, links, access_events
 
     def restore_records(self, memories: list[dict[str, Any]],
-                        events: list[dict[str, Any]], links: list[dict[str, Any]]) -> int:
+                        events: list[dict[str, Any]], links: list[dict[str, Any]],
+                        access_events: list[dict[str, Any]]) -> int:
         """Restore a complete snapshot into an empty database atomically."""
         with self._lock:
             try:
                 self.connection.execute("BEGIN IMMEDIATE")
-                for table in ("memories", "memory_events", "memory_links"):
+                for table in ("memories", "memory_events", "memory_links", "access_events"):
                     if self.connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
                         raise ValueError("JSONL restore requires an empty Memorycore database")
                 for item in memories:
@@ -499,6 +541,15 @@ class SQLiteDatabase:
                         ) VALUES (?, ?, ?, ?, ?, ?)""",
                         (link["id"], link["from_memory_id"], link["to_memory_id"],
                          link["relation_type"], link.get("created_by"), link["created_at"]),
+                    )
+                for event in access_events:
+                    self.connection.execute(
+                        """INSERT INTO access_events (
+                            id, client_id, operation, project_id, memory_id, reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (event["id"], event.get("client_id"), event["operation"],
+                         event.get("project_id"), event.get("memory_id"), event["reason"],
+                         event["created_at"]),
                     )
                 self.connection.commit()
             except Exception:

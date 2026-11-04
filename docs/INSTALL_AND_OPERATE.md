@@ -37,8 +37,8 @@ recovery artifact. Restore it while Memorycore is stopped by opening the backup
 as the service database, then run `doctor` and a scoped search before reconnecting
 clients. Do not copy a live WAL database file by itself.
 
-`export` writes a version 2 JSONL snapshot with records, every audit event,
-relationships, counts, and a SHA-256 trailer. The file is replaced only after
+`export` writes a version 2 JSONL snapshot with records, every memory and
+access audit event, relationships, counts, and a SHA-256 trailer. The file is replaced only after
 the complete export is flushed. `import` verifies that trailer and restores the
 snapshot atomically into an **empty** initialized Memorycore database. It rejects
 older partial JSONL exports because those cannot restore complete history and

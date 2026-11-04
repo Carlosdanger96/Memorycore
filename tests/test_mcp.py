@@ -93,6 +93,37 @@ async def test_reviewer_sees_duplicate_before_approval(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_policy_denial_is_durable_and_contains_no_request_content(tmp_path):
+    path = tmp_path / "denials.db"
+    service = MemoryService(path)
+    writer = MemoryMCPAdapter(
+        service, MemoryMCPPolicy(
+            client_id="writer", client_role="writer", allowed_projects={"alpha"}
+        )
+    )
+    with pytest.raises(MemoryAccessError):
+        await writer.memory_add(
+            project_id="beta", memory_type="fact", content="private request content"
+        )
+    with pytest.raises(MemoryAccessError):
+        await writer.memory_access_audit()
+    service.close()
+
+    reopened = MemoryService(path)
+    admin = MemoryMCPAdapter(
+        reopened, MemoryMCPPolicy(client_id="admin", client_role="administrator")
+    )
+    events = await admin.memory_access_audit(limit=10)
+    assert [(event["operation"], event["reason"]) for event in events] == [
+        ("memory_access_audit", "access_denied"),
+        ("memory_add", "project_not_allowed"),
+    ]
+    assert events[1]["project_id"] == "beta"
+    assert "private request content" not in str(events)
+    reopened.close()
+
+
+@pytest.mark.asyncio
 async def test_writer_cannot_edit_active_memory_or_spoof_identity(tmp_path):
     service = MemoryService(tmp_path / "mcp-roles.db")
     writer = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="mistral", client_role="writer"))

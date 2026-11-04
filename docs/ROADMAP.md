@@ -17,7 +17,8 @@ this work and is outside these gates.
   and links, verified by a restart and restore test.
 - [x] SQLite exact and high-overlap duplicate safeguards before activation,
   including concurrent writes and reviewer-visible candidate IDs.
-- [ ] Durable audit of every denied action without exposing private content.
+- [x] Durable policy-denial and HTTP 401/403 audit without headers, tokens,
+  or request content; included in JSONL recovery.
 - [ ] Clean-install and migration tests on Windows and supported Python versions.
 
 ## Shared service

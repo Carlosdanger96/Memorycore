@@ -59,6 +59,12 @@ class PostgresDatabase:
                 created_by TEXT, created_at TEXT NOT NULL,
                 UNIQUE(from_memory_id, to_memory_id, relation_type)
             )"""))
+            connection.execute(text("""CREATE TABLE IF NOT EXISTS access_events (
+                id TEXT PRIMARY KEY, client_id TEXT, operation TEXT NOT NULL,
+                project_id TEXT, memory_id TEXT, reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )"""))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events(created_at DESC)"))
 
     def close(self) -> None:
         self.engine.dispose()
@@ -134,7 +140,26 @@ class PostgresDatabase:
             rows = connection.execute(text("SELECT * FROM memory_events WHERE memory_id=:memory_id ORDER BY event_order ASC LIMIT :limit"), {"memory_id": memory_id, "limit": limit}).mappings().all()
         return [{key: value for key, value in row.items() if key != "event_order"} for row in rows]
 
-    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]]]:
+    def record_access_denial(self, event: dict[str, Any]) -> None:
+        from sqlalchemy import text
+
+        with self.engine.begin() as connection:
+            connection.execute(text("""INSERT INTO access_events (
+                id, client_id, operation, project_id, memory_id, reason, created_at
+            ) VALUES (:id, :client_id, :operation, :project_id, :memory_id,
+                      :reason, :created_at)"""), event)
+
+    def list_access_denials(self, project_id: str | None, limit: int) -> list[dict[str, Any]]:
+        from sqlalchemy import text
+
+        with self.engine.connect() as connection:
+            rows = connection.execute(text("""SELECT * FROM access_events
+                WHERE (CAST(:project_id AS TEXT) IS NULL OR project_id=:project_id)
+                ORDER BY created_at DESC, id DESC LIMIT :limit"""),
+                {"project_id": project_id, "limit": limit}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         from sqlalchemy import text
 
         with self.engine.connect().execution_options(isolation_level="REPEATABLE READ") as connection:
@@ -148,14 +173,18 @@ class PostgresDatabase:
             links = [dict(row) for row in connection.execute(
                 text("SELECT * FROM memory_links ORDER BY id")
             ).mappings().all()]
-        return memories, events, links
+            access_events = [dict(row) for row in connection.execute(
+                text("SELECT * FROM access_events ORDER BY created_at, id")
+            ).mappings().all()]
+        return memories, events, links, access_events
 
     def restore_records(self, memories: list[dict[str, Any]],
-                        events: list[dict[str, Any]], links: list[dict[str, Any]]) -> int:
+                        events: list[dict[str, Any]], links: list[dict[str, Any]],
+                        access_events: list[dict[str, Any]]) -> int:
         from sqlalchemy import text
 
         with self.engine.begin() as connection:
-            for table in ("memories", "memory_events", "memory_links"):
+            for table in ("memories", "memory_events", "memory_links", "access_events"):
                 if connection.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first():
                     raise ValueError("JSONL restore requires an empty Memorycore database")
             for item in memories:
@@ -179,6 +208,11 @@ class PostgresDatabase:
                     id, from_memory_id, to_memory_id, relation_type, created_by, created_at
                 ) VALUES (:id, :from_memory_id, :to_memory_id, :relation_type,
                           :created_by, :created_at)"""), link)
+            for event in access_events:
+                connection.execute(text("""INSERT INTO access_events (
+                    id, client_id, operation, project_id, memory_id, reason, created_at
+                ) VALUES (:id, :client_id, :operation, :project_id, :memory_id,
+                          :reason, :created_at)"""), event)
         return len(memories)
 
     def replace_memory(self, original: Memory, replacement: dict[str, Any], *,

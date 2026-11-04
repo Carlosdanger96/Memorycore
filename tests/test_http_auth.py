@@ -102,3 +102,13 @@ async def test_http_mcp_uses_bearer_tokens_for_identity_and_roles(tmp_path):
     finally:
         process.terminate()
         await process.wait()
+    from memorycore.memory_service import MemoryService
+
+    audit = MemoryService(tmp_path / "shared.db")
+    try:
+        denials = audit.get_access_denials(limit=10)
+        assert any(event["operation"] == "http_request" and
+                   event["reason"] == "unauthenticated" for event in denials)
+        assert all("token" not in str(event).lower() for event in denials)
+    finally:
+        audit.close()

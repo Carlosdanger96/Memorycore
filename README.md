@@ -177,7 +177,8 @@ Each memory records its writer and provenance: `created_by`, `updated_by`,
 `source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
 `memory_add`, `memory_duplicate_candidates`, `memory_get`, `memory_search`, `memory_retrieve_context`,
 `memory_update`, `memory_approve`, `memory_reject`, `memory_archive`,
-`memory_history`, `memory_supersede`, `memory_correct`, and `memory_health`.
+`memory_history`, `memory_access_audit`, `memory_supersede`, `memory_correct`,
+and `memory_health`.
 
 Each local MCP process receives its identity from its environment. This prevents
 an LLM tool call from impersonating another client. Supported roles are
@@ -208,6 +209,9 @@ with at least four distinct terms and 80% token overlap in the same project.
 `memory_duplicate_candidates` returns matching IDs and reasons so a reviewer
 can correct, supersede, or revise a proposal. The check is transactional for
 concurrent SQLite writes. PostgreSQL parity remains a separate release gate.
+Permission denials and HTTP authentication failures are recorded without
+request content or credentials. Administrators can inspect policy denials with
+`memory_access_audit`; the audit is included in JSONL recovery.
 Future supported integrations must preserve this contract and
 the same shared database rather than creating provider-specific memory silos.
 
