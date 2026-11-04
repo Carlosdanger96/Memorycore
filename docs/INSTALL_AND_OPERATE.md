@@ -29,6 +29,12 @@ memorycore import export\memorycore.jsonl
 ```
 
 Run `.\scripts\verify-windows.ps1` to recheck the installation and tests.
+The setup and verification scripts also find `uv` in the usual Windows user
+locations when `python` is not on `PATH`.
+
+The central HTTP service exposes `GET /readyz` on loopback. It returns only a
+readiness boolean. A second HTTP service targeting the same database on this
+host fails at startup; the operating-system lock releases after a crash.
 
 ## SQLite recovery
 

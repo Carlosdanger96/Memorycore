@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install --upgrade pip
-      - run: pip install -e ".[mcp-test,postgres]"
+      - run: pip install -e ".[mcp-test,postgres,oauth]"
       - run: python -m compileall src tests
       - run: pytest
       - run: memorycore --db ./ci-memorycore.db init

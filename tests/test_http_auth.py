@@ -70,6 +70,10 @@ async def test_http_mcp_uses_bearer_tokens_for_identity_and_roles(tmp_path):
         else:
             pytest.fail("authenticated HTTP MCP server did not start")
 
+        async with httpx.AsyncClient(timeout=2, trust_env=False) as probe:
+            ready = await probe.get(f"http://127.0.0.1:{port}/readyz")
+        assert ready.status_code == 200 and ready.json() == {"ready": True}
+
         writer_client, writer_transport, writer = await _connect(
             url, "writer-token-012345678901234567890123456789"
         )
@@ -110,5 +114,18 @@ async def test_http_mcp_uses_bearer_tokens_for_identity_and_roles(tmp_path):
         assert any(event["operation"] == "http_request" and
                    event["reason"] == "unauthenticated" for event in denials)
         assert all("token" not in str(event).lower() for event in denials)
+        before = audit.database.snapshot_records()
+        backup = tmp_path / "recovered.db"
+        audit.backup(backup)
     finally:
         audit.close()
+
+    restored = MemoryService(backup)
+    try:
+        after = restored.database.snapshot_records()
+        assert [item.to_dict() for item in after[0]] == [item.to_dict() for item in before[0]]
+        assert after[1:] == before[1:]
+        assert restored.search_memory(query="token identity", project_id="alpha")[0].id == record["id"]
+        assert restored.search_memory(query="token identity", project_id="beta") == []
+    finally:
+        restored.close()

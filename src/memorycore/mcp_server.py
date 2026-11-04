@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import os
 import inspect
+from contextlib import nullcontext
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .http_auth import StaticTokenVerifier
+from .http_auth import JWKSClientVerifier, StaticTokenVerifier
 from .memory_service import MemoryService
 from .models import ClientRole, MemoryStatus, validate_client_role
+from .service_lease import central_service_lease
 
 
 class MemoryAccessError(PermissionError):
@@ -38,6 +40,24 @@ class _HTTPDenialAudit:
             await send(message)
 
         await self.app(scope, receive, audited_send)
+
+
+class _Readiness:
+    """Minimal local probe without exposing records or credentials."""
+
+    def __init__(self, app, service: MemoryService) -> None:
+        self.app = app
+        self.service = service
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") != "/readyz":
+            await self.app(scope, receive, send)
+            return
+        ready = bool(self.service.health().get("ok"))
+        body = b'{"ready":true}' if ready else b'{"ready":false}'
+        await send({"type": "http.response.start", "status": 200 if ready else 503,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": body})
 
 
 def _audit_denial(method):
@@ -301,14 +321,15 @@ class MemoryMCPAdapter:
         return self.service.health()
 
 
-def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier | None = None,
+def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier | JWKSClientVerifier | None = None,
                   public_url: str | None = None) -> FastMCP:
     auth = None
     if token_verifier is not None:
         from mcp.server.auth.settings import AuthSettings
         # A bearer-token connector does not need us to operate an OAuth issuer,
         # but FastMCP requires a valid issuer URL when enabling its auth layer.
-        issuer_url = os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid")
+        issuer_url = (token_verifier.issuer if isinstance(token_verifier, JWKSClientVerifier)
+                      else os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid"))
         auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url)
     server = FastMCP(
         "Memorycore",
@@ -351,12 +372,33 @@ def run_server(database_path: str | Path | None = None, *, transport: str | None
     ``streamable-http`` is the central-service transport. Stdio remains useful
     for local development and hosts that cannot yet connect to HTTP MCP.
     """
-    service = MemoryService(database_path or default_database_path())
+    target = database_path or default_database_path()
+    selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
+    lease = central_service_lease(target) if selected_transport != "stdio" else nullcontext()
+    with lease:
+        _run_server_owned(target, selected_transport, host, port)
+
+
+def _run_server_owned(target: str | Path, selected_transport: str,
+                      host: str | None, port: int | None) -> None:
+    bind_host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+    if selected_transport != "stdio" and bind_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise ValueError("HTTP MCP must bind to loopback behind an HTTPS proxy or tunnel")
+    service = MemoryService(target)
     try:
-        selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
         if selected_transport not in {"stdio", "streamable-http", "sse"}:
             raise ValueError("transport must be stdio, streamable-http, or sse")
-        token_verifier = StaticTokenVerifier.from_environment() if selected_transport != "stdio" else None
+        token_verifier = None
+        if selected_transport != "stdio":
+            static = StaticTokenVerifier.from_environment()
+            oauth = JWKSClientVerifier.from_environment()
+            if static is not None and oauth is not None:
+                raise ValueError("configure either static HTTP tokens or OAuth, not both")
+            token_verifier = oauth or static
+            if oauth is not None:
+                public_url = os.getenv("MEMORYCORE_PUBLIC_URL", "")
+                if public_url != oauth.audience:
+                    raise ValueError("OAuth audience must equal MEMORYCORE_PUBLIC_URL")
         if selected_transport != "stdio" and token_verifier is None and os.getenv("MEMORYCORE_ALLOW_INSECURE_HTTP", "").lower() not in {"1", "true", "yes"}:
             raise ValueError(
                 "HTTP MCP requires MEMORYCORE_HTTP_TOKENS_FILE. Set MEMORYCORE_ALLOW_INSECURE_HTTP=true only for isolated testing."
@@ -366,16 +408,17 @@ def run_server(database_path: str | Path | None = None, *, transport: str | None
         if selected_transport == "stdio":
             server.run(transport="stdio")
         elif selected_transport == "streamable-http":
-            server.settings.host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+            server.settings.host = bind_host
             server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
             import uvicorn
 
             app = server.streamable_http_app()
             app.add_middleware(_HTTPDenialAudit, service=service)
+            app.add_middleware(_Readiness, service=service)
             uvicorn.run(app, host=server.settings.host, port=server.settings.port,
                         log_level=server.settings.log_level.lower())
         else:
-            server.settings.host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+            server.settings.host = bind_host
             server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
             server.run(transport=selected_transport)
     finally:
