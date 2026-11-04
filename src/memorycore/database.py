@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     memory_type TEXT NOT NULL CHECK (
-        memory_type IN ('fact','decision','preference','procedure','correction','note')
+        memory_type IN ('fact','decision','preference','procedure','correction','observation','note')
     ),
     content TEXT NOT NULL,
     summary TEXT,
@@ -165,14 +165,37 @@ class SQLiteDatabase:
         needs_rebuild = "'pending'" not in sql or "'observation'" not in sql
         if not needs_rebuild:
             return
+        existing = {row["name"] for row in self.connection.execute("PRAGMA table_info(memories)")}
+        columns = (
+            "id", "project_id", "memory_type", "content", "summary", "tags", "status",
+            "created_by", "updated_by", "client_id", "model_provider", "model_name",
+            "session_id", "source_type", "source_uri", "source_id", "confidence",
+            "metadata", "created_at", "updated_at",
+        )
+        defaults = {
+            "summary": "NULL", "tags": "'[]'", "status": "'active'", "created_by": "NULL",
+            "updated_by": "created_by" if "created_by" in existing else "NULL",
+            "client_id": "NULL", "model_provider": "NULL", "model_name": "NULL",
+            "session_id": "NULL", "source_type": "'manual_import'", "source_uri": "NULL",
+            "source_id": "NULL", "confidence": "NULL", "metadata": "'{}'",
+        }
+        projection = ", ".join(
+            name if name in existing else defaults[name] for name in columns
+        )
         try:
-            self.connection.executescript("""
+            self.connection.executescript(f"""
             BEGIN IMMEDIATE;
+            CREATE TEMP TABLE preserved_events AS
+                SELECT rowid AS original_order, * FROM memory_events;
+            CREATE TEMP TABLE preserved_links AS
+                SELECT rowid AS original_order, * FROM memory_links;
             DROP TRIGGER IF EXISTS memories_ai;
             DROP TRIGGER IF EXISTS memories_ad;
             DROP TRIGGER IF EXISTS memories_au;
             DROP INDEX IF EXISTS idx_memories_project_status;
             DROP INDEX IF EXISTS idx_memories_project_type;
+            DROP INDEX IF EXISTS idx_memories_project_status_updated;
+            DROP INDEX IF EXISTS idx_memories_active_project_updated;
             DROP TABLE IF EXISTS memory_events;
             DROP TABLE IF EXISTS memory_links;
             ALTER TABLE memories RENAME TO memories_legacy;
@@ -198,17 +221,12 @@ class SQLiteDatabase:
                 source_uri TEXT,
                 source_id TEXT,
                 confidence REAL,
-                metadata TEXT NOT NULL DEFAULT '{}',
+                metadata TEXT NOT NULL DEFAULT '{{}}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            INSERT INTO memories (
-                id, project_id, memory_type, content, summary, tags, status,
-                created_by, updated_by, metadata, created_at, updated_at
-            ) SELECT
-                id, project_id, memory_type, content, summary, tags, status,
-                created_by, created_by, metadata, created_at, updated_at
-            FROM memories_legacy;
+            INSERT INTO memories ({", ".join(columns)})
+            SELECT {projection} FROM memories_legacy;
             DROP TABLE memories_legacy;
             CREATE INDEX IF NOT EXISTS idx_memories_project_status
             ON memories(project_id, status);
@@ -216,6 +234,8 @@ class SQLiteDatabase:
             ON memories(project_id, memory_type);
             CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated
             ON memories(project_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated
+            ON memories(project_id, updated_at DESC) WHERE status = 'active';
             CREATE TABLE memory_events (
                 id TEXT PRIMARY KEY,
                 memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -224,11 +244,17 @@ class SQLiteDatabase:
                 client_id TEXT,
                 previous_state TEXT,
                 new_state TEXT,
-                details TEXT NOT NULL DEFAULT '{}',
+                details TEXT NOT NULL DEFAULT '{{}}',
                 created_at TEXT NOT NULL
             );
             CREATE INDEX idx_memory_events_memory_created
             ON memory_events(memory_id, created_at DESC);
+            INSERT INTO memory_events (
+                id, memory_id, project_id, event_type, client_id, previous_state,
+                new_state, details, created_at
+            ) SELECT id, memory_id, project_id, event_type, client_id,
+                     previous_state, new_state, details, created_at
+              FROM preserved_events ORDER BY original_order;
             CREATE TABLE memory_links (
                 id TEXT PRIMARY KEY,
                 from_memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -238,6 +264,12 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL,
                 UNIQUE(from_memory_id, to_memory_id, relation_type)
             );
+            INSERT INTO memory_links (
+                id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+            ) SELECT id, from_memory_id, to_memory_id, relation_type,
+                     created_by, created_at FROM preserved_links ORDER BY original_order;
+            DROP TABLE preserved_events;
+            DROP TABLE preserved_links;
             DELETE FROM memory_fts;
             INSERT INTO memory_fts(id, content, summary, tags)
             SELECT id, content, COALESCE(summary, ''), tags FROM memories;

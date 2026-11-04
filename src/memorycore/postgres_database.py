@@ -7,6 +7,7 @@ MemoryService. MCP clients never select a database engine or connect to it.
 """
 
 import json
+import hashlib
 from typing import Any
 from uuid import uuid4
 
@@ -29,6 +30,10 @@ class PostgresDatabase:
     def initialize(self) -> None:
         text = self._sqlalchemy.text
         with self.engine.begin() as connection:
+            connection.execute(text("""CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY, name TEXT NOT NULL,
+                checksum TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )"""))
             connection.execute(text("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, memory_type TEXT NOT NULL,
@@ -65,6 +70,21 @@ class PostgresDatabase:
                 created_at TEXT NOT NULL
             )"""))
             connection.execute(text("CREATE INDEX IF NOT EXISTS idx_access_events_created ON access_events(created_at DESC)"))
+            for version, name, description in (
+                (1, "postgres_storage", "memories:jsonb provenance; memory_events; project indexes; tsvector"),
+                (2, "postgres_history_and_access", "event_order; memory_links; access_events"),
+            ):
+                checksum = hashlib.sha256(description.encode("utf-8")).hexdigest()
+                recorded = connection.execute(text(
+                    "SELECT checksum FROM schema_migrations WHERE version=:version"
+                ), {"version": version}).scalar_one_or_none()
+                if recorded is not None and recorded != checksum:
+                    raise RuntimeError(f"migration checksum mismatch for version {version}")
+                if recorded is None:
+                    connection.execute(text("""INSERT INTO schema_migrations (
+                        version, name, checksum
+                    ) VALUES (:version, :name, :checksum)"""),
+                    {"version": version, "name": name, "checksum": checksum})
 
     def close(self) -> None:
         self.engine.dispose()
