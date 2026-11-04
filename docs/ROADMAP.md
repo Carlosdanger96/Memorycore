@@ -15,7 +15,7 @@ this work and is outside these gates.
 - [x] Transactional correction and supersession with retained history.
 - [x] Online SQLite backup and complete JSONL export/import of records, events,
   and links, verified by a restart and restore test.
-- [ ] Deterministic exact and probable duplicate safeguards before activation,
+- [x] SQLite exact and high-overlap duplicate safeguards before activation,
   including concurrent writes and reviewer-visible candidate IDs.
 - [ ] Durable audit of every denied action without exposing private content.
 - [ ] Clean-install and migration tests on Windows and supported Python versions.

@@ -118,9 +118,6 @@ class MemoryMCPAdapter:
                          confidence: float | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         self.policy.check_project(project_id)
-        duplicate = self.service.find_exact_duplicate(project_id=project_id, memory_type=memory_type, content=content)
-        if duplicate is not None:
-            raise ValueError(f"exact duplicate memory exists: {duplicate.id}")
         return self.service.add_memory(project_id=project_id, memory_type=memory_type,
             content=content, summary=summary, tags=tags, created_by=self.policy.client_id,
             metadata=metadata, client_id=self.policy.client_id,
@@ -128,6 +125,13 @@ class MemoryMCPAdapter:
             session_id=session_id, source_type=source_type,
             source_uri=source_uri, source_id=source_id, confidence=confidence,
             status=self.policy.creation_status()).to_dict()
+
+    async def memory_duplicate_candidates(self, project_id: str, content: str,
+                                          limit: int = 10) -> list[dict[str, Any]]:
+        self.policy.check_project(project_id)
+        return self.service.duplicate_candidates(
+            project_id=project_id, content=content, limit=limit
+        )
 
     async def memory_get(self, memory_id: str) -> dict[str, Any] | None:
         memory = self.service.get_memory(memory_id)
@@ -235,6 +239,7 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     )
     adapter = MemoryMCPAdapter(service, token_verifier=token_verifier)
     server.tool(name="memory_add")(adapter.memory_add)
+    server.tool(name="memory_duplicate_candidates")(adapter.memory_duplicate_candidates)
     server.tool(name="memory_get")(adapter.memory_get)
     server.tool(name="memory_search")(adapter.memory_search)
     server.tool(name="memory_retrieve_context")(adapter.memory_retrieve_context)

@@ -71,6 +71,28 @@ async def test_mcp_approval_mode_creates_pending_memory(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_reviewer_sees_duplicate_before_approval(tmp_path):
+    service = MemoryService(tmp_path / "duplicate-review.db")
+    active = service.add_memory(
+        project_id="alpha", memory_type="fact", content="Shared durable memory exists"
+    )
+    writer = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="writer", client_role="writer"))
+    proposed = await writer.memory_add(
+        project_id="alpha", memory_type="fact", content="Shared durable memory exists"
+    )
+    reviewer = MemoryMCPAdapter(
+        service, MemoryMCPPolicy(client_id="reviewer", client_role="approver")
+    )
+    assert await reviewer.memory_duplicate_candidates("alpha", proposed["content"]) == [
+        {"memory_id": active.id, "reason": "exact", "score": 1.0}
+    ]
+    with pytest.raises(ValueError, match=active.id):
+        await reviewer.memory_approve(proposed["id"])
+    assert service.get_memory(proposed["id"]).status == "pending"
+    service.close()
+
+
+@pytest.mark.asyncio
 async def test_writer_cannot_edit_active_memory_or_spoof_identity(tmp_path):
     service = MemoryService(tmp_path / "mcp-roles.db")
     writer = MemoryMCPAdapter(service, MemoryMCPPolicy(client_id="mistral", client_role="writer"))

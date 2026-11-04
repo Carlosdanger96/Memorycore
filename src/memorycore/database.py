@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -295,7 +296,11 @@ class SQLiteDatabase:
 
     def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
         with self._lock:
-            self.connection.execute(
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                if values["status"] == "active":
+                    self._reject_duplicate(values["project_id"], values["content"])
+                self.connection.execute(
                 """
                 INSERT INTO memories (
                     id, project_id, memory_type, content, summary, tags, status,
@@ -318,9 +323,12 @@ class SQLiteDatabase:
                     values["created_at"], values["updated_at"],
                 ),
             )
-            if audit_event:
-                self._insert_event(audit_event)
-            self.connection.commit()
+                if audit_event:
+                    self._insert_event(audit_event)
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
         memory = self.get(values["id"])
         if memory is None:
             raise RuntimeError("inserted memory could not be reloaded")
@@ -378,7 +386,11 @@ class SQLiteDatabase:
         updated_at = values.get("updated_at", current.updated_at)
         updated_by = values.get("updated_by", current.updated_by)
         with self._lock:
-            self.connection.execute(
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                if status == "active" and (current.status != "active" or content != current.content):
+                    self._reject_duplicate(current.project_id, content, exclude_id=memory_id)
+                self.connection.execute(
                 """
                 UPDATE memories
                 SET content = ?, summary = ?, tags = ?, status = ?,
@@ -388,10 +400,50 @@ class SQLiteDatabase:
                 (content, summary, json.dumps(tags, ensure_ascii=False), status,
                  json.dumps(metadata, ensure_ascii=False), updated_at, updated_by, memory_id),
             )
-            if audit_event:
-                self._insert_event(audit_event)
-            self.connection.commit()
+                if audit_event:
+                    self._insert_event(audit_event)
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
         return self.get(memory_id)
+
+    @staticmethod
+    def _normalized_content(content: str) -> str:
+        return " ".join(content.casefold().split())
+
+    def duplicate_candidates(self, project_id: str, content: str,
+                             exclude_id: str | None = None) -> list[dict[str, Any]]:
+        """Deterministic same-project exact and high-overlap candidates."""
+        normalized = self._normalized_content(content)
+        tokens = set(re.findall(r"\w+", normalized))
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT id, content FROM memories
+                   WHERE project_id = ? AND status = 'active' AND id != ?""",
+                (project_id, exclude_id or ""),
+            ).fetchall()
+        matches = []
+        for row in rows:
+            candidate = self._normalized_content(row["content"])
+            if candidate == normalized:
+                matches.append({"memory_id": row["id"], "reason": "exact", "score": 1.0})
+                continue
+            other = set(re.findall(r"\w+", candidate))
+            if min(len(tokens), len(other)) < 4:
+                continue
+            overlap = len(tokens & other) / len(tokens | other)
+            if overlap >= 0.8:
+                matches.append({"memory_id": row["id"], "reason": "probable",
+                                "score": round(overlap, 4)})
+        return sorted(matches, key=lambda item: (-item["score"], item["memory_id"]))
+
+    def _reject_duplicate(self, project_id: str, content: str,
+                          exclude_id: str | None = None) -> None:
+        matches = self.duplicate_candidates(project_id, content, exclude_id)
+        if matches:
+            first = matches[0]
+            raise ValueError(f"{first['reason']} duplicate memory exists: {first['memory_id']}")
 
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
@@ -515,6 +567,9 @@ class SQLiteDatabase:
         with self._lock:
             try:
                 self.connection.execute("BEGIN IMMEDIATE")
+                self._reject_duplicate(
+                    replacement["project_id"], replacement["content"], exclude_id=original.id
+                )
                 self.connection.execute("""INSERT INTO memories (id, project_id, memory_type, content, summary, tags, status, created_by, updated_by, client_id, model_provider, model_name, session_id, source_type, source_uri, source_id, confidence, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (replacement["id"], replacement["project_id"], replacement["memory_type"], replacement["content"], replacement.get("summary"), json.dumps(replacement.get("tags", [])), replacement["status"], replacement.get("created_by"), replacement.get("updated_by"), replacement.get("client_id"), replacement.get("model_provider"), replacement.get("model_name"), replacement.get("session_id"), replacement["source_type"], replacement.get("source_uri"), replacement.get("source_id"), replacement.get("confidence"), json.dumps(replacement.get("metadata", {})), replacement["created_at"], replacement["updated_at"]))
                 self.connection.execute("UPDATE memories SET status=?, updated_by=?, updated_at=? WHERE id=?", (original_status, replacement.get("created_by"), replacement["updated_at"], original.id))
                 self.connection.execute("INSERT INTO memory_links(id, from_memory_id, to_memory_id, relation_type, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (str(__import__('uuid').uuid4()), replacement["id"], original.id, relation_type, replacement.get("created_by"), replacement["created_at"]))

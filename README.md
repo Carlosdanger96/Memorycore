@@ -42,8 +42,8 @@ deterministic retrieval, backup/export/import, and a central MCP service mode.
 
 ## Status
 
-The repository contains the v0.2 prototype foundation. Possible-duplicate
-detection, PostgreSQL integration tests, and the Mistral Vibe ↔ Hermes live
+The repository contains the v0.2 prototype foundation. PostgreSQL integration
+tests and the Mistral Vibe ↔ Hermes live
 workflow remain required before calling it a complete shared-memory release.
 
 The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
@@ -175,7 +175,7 @@ included local PostgreSQL container, install `.[postgres,mcp]`, then set
 Each memory records its writer and provenance: `created_by`, `updated_by`,
 `client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
 `source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
-`memory_add`, `memory_get`, `memory_search`, `memory_retrieve_context`,
+`memory_add`, `memory_duplicate_candidates`, `memory_get`, `memory_search`, `memory_retrieve_context`,
 `memory_update`, `memory_approve`, `memory_reject`, `memory_archive`,
 `memory_history`, `memory_supersede`, `memory_correct`, and `memory_health`.
 
@@ -203,6 +203,11 @@ An unset allowlist permits all projects. `MEMORYCORE_REQUIRE_APPROVAL` lets a
 trusted client promote a reviewed memory from `pending` to `active` with
 `memory_approve`. Normal search and context retrieval return only `active`
 memories; an explicit `status` argument is required to retrieve history.
+SQLite activation rejects an exact case/whitespace match or a probable match
+with at least four distinct terms and 80% token overlap in the same project.
+`memory_duplicate_candidates` returns matching IDs and reasons so a reviewer
+can correct, supersede, or revise a proposal. The check is transactional for
+concurrent SQLite writes. PostgreSQL parity remains a separate release gate.
 Future supported integrations must preserve this contract and
 the same shared database rather than creating provider-specific memory silos.
 

@@ -110,6 +110,14 @@ class MemoryService:
             return None
         return self.database.find_exact_active(project_id.strip(), validate_memory_type(memory_type), content.strip())
 
+    def duplicate_candidates(self, *, project_id: str, content: str,
+                             exclude_id: str | None = None, limit: int = 10) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 100:
+            raise ValueError("limit must be between 1 and 100")
+        if not isinstance(self.database, SQLiteDatabase):
+            raise RuntimeError("duplicate detection is not yet available for PostgreSQL")
+        return self.database.duplicate_candidates(project_id.strip(), content.strip(), exclude_id)[:limit]
+
     def link_memories(self, *, from_memory_id: str, to_memory_id: str,
                       relation_type: str, created_by: str | None = None) -> None:
         """Record a supersedes/corrects/contradicts relationship between two
