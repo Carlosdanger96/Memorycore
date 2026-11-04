@@ -19,6 +19,12 @@ Both clients use the same URL and never open the
 database file. Keep live Omni client settings unchanged until Memorycore's
 release gates pass.
 
+Before launching an isolated Hermes client, follow
+[Hermes runtime preflight](HERMES_RUNTIME_PREFLIGHT.md). Its Python runtime and
+SDK dependencies belong to the client environment; Memorycore's service setup
+does not install them. A passing MCP discovery check does not prove the model
+client can load its SDK or complete a tool-driven handoff.
+
 The automated `test_cross_client.py` test validates the same MCP protocol
 workflow without requiring either desktop application to be installed:
 
