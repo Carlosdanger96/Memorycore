@@ -1,4 +1,6 @@
 # Merge under mcp_servers in a private Hermes config for an isolated test.
+# Connection fragment only; install/preflight Hermes' own runtime separately.
+# See docs/HERMES_RUNTIME_PREFLIGHT.md. Do not reuse Memorycore's service venv.
 # Replace the placeholder with Hermes' own token from the private registry.
 mcp_servers:
   memorycore:
