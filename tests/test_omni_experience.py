@@ -32,7 +32,7 @@ def test_trajectory_is_append_only_ordered_idempotent_and_redacted(tmp_path):
 
 def test_error_signature_removes_machine_paths_and_is_stable():
     left = error_signature(
-        error_type="ToolError", message="failed at C:\\Users\\Nate\\agent.py",
+        error_type="ToolError", message="failed at C:\\Users\\ExampleUser\\agent.py",
         behavior_id="agent.output.verify", tool_name="lookup",
         verification_result="false", repository="repo",
     )
