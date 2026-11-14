@@ -16,7 +16,7 @@ make a database copy of Omni notes authoritative.
 ## Omni Memory integration boundary
 
 The installed Omni Memory system has a separate, established authority:
-`C:/Users/cool-/Documents/Carlosdanger/omni-memory/` Markdown notes. When
+`<OMNI_MARKDOWN_ROOT>/` Markdown notes. When
 Memorycore later serves Omni Memory, those files remain authoritative. Its
 SQLite FTS/vector data is a disposable index over the notes, not a second set
 of independently editable memories. Hermes and OpenClaw use one scoped access
