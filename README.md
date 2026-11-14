@@ -1,4 +1,8 @@
-# Memorycore
+# Omni Memory Harness — powered by Memorycore
+
+[![Omni Memory Harness CI](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml/badge.svg?branch=hackathon%2Fomni-memory-harness)](https://github.com/Carlosdanger96/Memorycore/actions/workflows/omni-harness.yml?query=branch%3Ahackathon%2Fomni-memory-harness)
+
+**Omni Memory Harness helps AI agents remember not only facts, but how their behavior is implemented, what previously failed, why it failed, and which verified correction should be applied before trying again.**
 
 Memorycore is a shared memory system for multiple LLMs.
 
@@ -23,6 +27,25 @@ opening or editing the database file.
 
 Memorycore is not primarily a note-taking application, database experiment, agent framework, or general knowledge-management platform. It is a shared memory layer for multiple LLMs.
 
+## Architecture in 20 seconds
+
+```mermaid
+flowchart LR
+    A[Agent repository] --> B[Behavior scanner]
+    C[Agent execution] --> D[Trajectory recorder]
+    B --> E[Memorycore governance]
+    D --> E
+    E --> F[Correction retrieval]
+    E --> G[GPT-5.6 audit proposals]
+    F --> C
+    E --> H[MCP and REST]
+    E --> I[Obsidian projection]
+```
+
+Memorycore owns canonical storage, lifecycle, authorization, and provenance.
+Omni Memory Harness adds behavior maps, append-only execution experience,
+verified correction reuse, governed audit proposals, and human-readable views.
+
 ## Current architecture
 
 The v0.2 prototype establishes the durable storage foundation required for shared LLM memory:
@@ -40,7 +63,70 @@ SQLite (local prototype) → PostgreSQL (shared production)
 The current release includes SQLite storage, audit history, lifecycle controls,
 deterministic retrieval, backup/export/import, and a central MCP service mode.
 
-## Status
+The hackathon branch adds the Omni Memory Harness vertical slice: read-only
+behavior-to-code scanning, append-only trajectories, reusable structured
+corrections, deterministic or optional GPT-5.6 auditing, approval-gated
+revisions, REST/MCP interfaces, and idempotent Obsidian projections. Memorycore
+remains canonical; generated Markdown never becomes storage authority.
+
+## Judge quick start
+
+No external account, API key, real vault, or production database is required:
+
+```bash
+git clone --branch hackathon/omni-memory-harness --single-branch https://github.com/Carlosdanger96/Memorycore.git
+cd Memorycore
+./scripts/demo.sh
+```
+
+Windows PowerShell:
+
+```powershell
+git clone --branch hackathon/omni-memory-harness --single-branch https://github.com/Carlosdanger96/Memorycore.git
+cd Memorycore
+.\scripts\demo.ps1
+```
+
+Expected proof:
+
+```text
+ok: true
+behavior_count: 7
+initial trajectory: failed
+correction retrieved before rerun: yes
+verification run: yes
+corrected trajectory: passed
+correction reuse: 1 application / 1 success / 100%
+Obsidian projection: 14 files
+focused Omni tests: 17 passed
+```
+
+The command creates an isolated temporary database and vault, scans the
+synthetic agent, records a failed run, extracts and approves a correction,
+retrieves it before a successful rerun, audits contradictory memories, approves
+the revision, and generates Obsidian-compatible Markdown. It exits nonzero if
+any required proof fails.
+
+See [RESULTS.md](RESULTS.md), [TESTING.md](TESTING.md), and
+[DEMO_SCRIPT.md](DEMO_SCRIPT.md).
+
+For the component architecture, ordered implementation phases, acceptance
+gates, and LLM continuation protocol, see
+[OMNI_MEMORY_HARNESS_ARCHITECTURE.md](OMNI_MEMORY_HARNESS_ARCHITECTURE.md).
+
+## Hackathon submission status
+
+**Hackathon vertical slice: complete and verified.**
+
+**Broader Memorycore production roadmap: ongoing.**
+
+The deterministic offline demonstration, complete test suite, packaged-wheel
+installation, authenticated interfaces, security checks, migration checks, and
+Linux/Windows execution are automated in CI.
+
+The project source is licensed under the [MIT License](LICENSE).
+
+## Long-Term Memorycore Roadmap
 
 The repository contains the v0.2 prototype foundation. Possible-duplicate
 detection, PostgreSQL integration tests, and the Mistral Vibe ↔ Hermes live
@@ -66,7 +152,7 @@ Python already provides SQLite through the built-in `sqlite3` module. A separate
 ## Install on Windows
 
 ```powershell
-git clone https://github.com/Carlosdanger96/Memorycore.git
+git clone --branch hackathon/omni-memory-harness --single-branch https://github.com/Carlosdanger96/Memorycore.git
 cd Memorycore
 python -m venv .venv
 .venv\Scripts\Activate.ps1

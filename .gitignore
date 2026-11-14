@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.demo-venv/
 venv/
 .env
 http-clients.json
@@ -13,3 +14,7 @@ http-clients.json
 *.sqlite
 dist/
 build/
+evidence/
+ci-artifacts/
+wheel-demo/
+wheel-test/
