@@ -17,7 +17,10 @@ adapter for multi-machine service deployment.
 
 ## Storage model
 
-The `memories` table contains the current canonical record and its provenance.
+For standalone Memorycore storage, the `memories` table contains the current
+canonical record and its provenance. Omni Memory notes remain authoritative in
+Markdown; their SQLite retrieval index follows the separate integration
+boundary in [Design Decisions](DESIGN_DECISIONS.md).
 The following supporting tables complete the shared-memory model:
 
 | Table | Responsibility |

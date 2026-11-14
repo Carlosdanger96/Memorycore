@@ -26,6 +26,16 @@ concurrent writes. No client should receive direct production database access.
 The MCP interface, memory schema, lifecycle, and audit contract must remain
 stable across those storage adapters.
 
+## Omni Memory boundary
+
+The service owns its database for standalone Memorycore records. The installed
+Omni Memory vault has a different authority: its Markdown notes. A future
+shared Omni access route may index those notes in SQLite, but must not create
+an independently writable database copy. Agent changes must use Omni's
+reviewed, hash/revision-checked Markdown writer. See
+[Design Decisions](DESIGN_DECISIONS.md) and the
+[Roadmap](ROADMAP.md) for the integration gate.
+
 ## PostgreSQL local setup
 
 For the central-service development stack:

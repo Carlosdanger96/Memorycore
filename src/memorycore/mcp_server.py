@@ -1,18 +1,95 @@
 from __future__ import annotations
 
 import os
+import inspect
+from contextlib import nullcontext
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .http_auth import StaticTokenVerifier
+from .http_auth import JWKSClientVerifier, StaticTokenVerifier
 from .memory_service import MemoryService
 from .models import ClientRole, MemoryStatus, validate_client_role
+from .service_lease import central_service_lease
 
 
 class MemoryAccessError(PermissionError):
     """Raised when an MCP client exceeds this server's configured scope."""
+
+
+class _HTTPDenialAudit:
+    """Record rejected MCP requests without storing headers, tokens, or bodies."""
+
+    def __init__(self, app, service: MemoryService) -> None:
+        self.app = app
+        self.service = service
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") != "/mcp":
+            await self.app(scope, receive, send)
+            return
+
+        async def audited_send(message):
+            if message["type"] == "http.response.start" and message["status"] in (401, 403):
+                self.service.record_access_denial(
+                    client_id=None, operation="http_request",
+                    reason="unauthenticated" if message["status"] == 401 else "http_forbidden",
+                )
+            await send(message)
+
+        await self.app(scope, receive, audited_send)
+
+
+class _Readiness:
+    """Minimal local probe without exposing records or credentials."""
+
+    def __init__(self, app, service: MemoryService) -> None:
+        self.app = app
+        self.service = service
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope.get("path") != "/readyz":
+            await self.app(scope, receive, send)
+            return
+        ready = bool(self.service.health().get("ok"))
+        body = b'{"ready":true}' if ready else b'{"ready":false}'
+        await send({"type": "http.response.start", "status": 200 if ready else 503,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": body})
+
+
+def _audit_denial(method):
+    signature = inspect.signature(method)
+
+    @wraps(method)
+    async def wrapped(self, *args, **kwargs):
+        try:
+            return await method(self, *args, **kwargs)
+        except MemoryAccessError as exc:
+            arguments = signature.bind_partial(self, *args, **kwargs).arguments
+            message = str(exc)
+            reason = (
+                "project_not_allowed" if message.startswith("project is not allowed") else
+                "read_only" if message.startswith("Memorycore is configured as read-only") else
+                "role_denied" if message.startswith("role ") else
+                "writer_ownership" if message.startswith("writers may only update") else
+                "self_approval" if message.startswith("a client cannot approve") else
+                "access_denied"
+            )
+            try:
+                client_id = self.policy.client_id
+            except MemoryAccessError:
+                client_id = None
+            self.service.record_access_denial(
+                client_id=client_id, operation=method.__name__,
+                project_id=arguments.get("project_id"),
+                memory_id=arguments.get("memory_id"), reason=reason,
+            )
+            raise
+
+    return wrapped
 
 
 class MemoryMCPPolicy:
@@ -108,6 +185,7 @@ class MemoryMCPAdapter:
             model_name=identity.model_name,
         )
 
+    @_audit_denial
     async def memory_add(self, project_id: str, memory_type: str, content: str,
                          summary: str | None = None, tags: list[str] | None = None,
                          metadata: dict[str, Any] | None = None,
@@ -118,9 +196,6 @@ class MemoryMCPAdapter:
                          confidence: float | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.WRITER, ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         self.policy.check_project(project_id)
-        duplicate = self.service.find_exact_duplicate(project_id=project_id, memory_type=memory_type, content=content)
-        if duplicate is not None:
-            raise ValueError(f"exact duplicate memory exists: {duplicate.id}")
         return self.service.add_memory(project_id=project_id, memory_type=memory_type,
             content=content, summary=summary, tags=tags, created_by=self.policy.client_id,
             metadata=metadata, client_id=self.policy.client_id,
@@ -129,12 +204,22 @@ class MemoryMCPAdapter:
             source_uri=source_uri, source_id=source_id, confidence=confidence,
             status=self.policy.creation_status()).to_dict()
 
+    @_audit_denial
+    async def memory_duplicate_candidates(self, project_id: str, content: str,
+                                          limit: int = 10) -> list[dict[str, Any]]:
+        self.policy.check_project(project_id)
+        return self.service.duplicate_candidates(
+            project_id=project_id, content=content, limit=limit
+        )
+
+    @_audit_denial
     async def memory_get(self, memory_id: str) -> dict[str, Any] | None:
         memory = self.service.get_memory(memory_id)
         if memory is not None:
             self.policy.check_project(memory.project_id)
         return memory.to_dict() if memory else None
 
+    @_audit_denial
     async def memory_search(self, query: str, project_id: str, limit: int = 10,
                             memory_type: str | None = None,
                             status: str = "active") -> list[dict[str, Any]]:
@@ -142,6 +227,7 @@ class MemoryMCPAdapter:
         return [memory.to_dict() for memory in self.service.search_memory(
             query=query, project_id=project_id, limit=limit, memory_type=memory_type, status=status)]
 
+    @_audit_denial
     async def memory_retrieve_context(self, query: str, project_id: str, limit: int = 10,
                                       memory_type: str | None = None,
                                       status: str = "active") -> dict[str, Any]:
@@ -149,6 +235,7 @@ class MemoryMCPAdapter:
         return self.service.retrieve_context(query=query, project_id=project_id,
             limit=limit, memory_type=memory_type, status=status)
 
+    @_audit_denial
     async def memory_update(self, memory_id: str, content: str | None = None,
                             summary: str | None = None, tags: list[str] | None = None,
                             metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -164,6 +251,7 @@ class MemoryMCPAdapter:
             tags=tags, metadata=metadata, updated_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
+    @_audit_denial
     async def memory_approve(self, memory_id: str) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
@@ -174,6 +262,7 @@ class MemoryMCPAdapter:
         memory = self.service.approve_memory(memory_id, approved_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
+    @_audit_denial
     async def memory_reject(self, memory_id: str) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
@@ -182,6 +271,7 @@ class MemoryMCPAdapter:
         memory = self.service.reject_memory(memory_id, rejected_by=self.policy.client_id)
         return memory.to_dict() if memory else None
 
+    @_audit_denial
     async def memory_supersede(self, memory_id: str, content: str, summary: str | None = None,
                                tags: list[str] | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
@@ -190,6 +280,7 @@ class MemoryMCPAdapter:
             self.policy.check_project(existing.project_id)
         return self.service.supersede_memory(memory_id, content=content, summary=summary, tags=tags, updated_by=self.policy.client_id).to_dict()
 
+    @_audit_denial
     async def memory_correct(self, memory_id: str, content: str, summary: str | None = None,
                              tags: list[str] | None = None) -> dict[str, Any]:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
@@ -198,6 +289,7 @@ class MemoryMCPAdapter:
             self.policy.check_project(existing.project_id)
         return self.service.correct_memory(memory_id, content=content, summary=summary, tags=tags, updated_by=self.policy.client_id).to_dict()
 
+    @_audit_denial
     async def memory_archive(self, memory_id: str) -> dict[str, Any] | None:
         self.policy.require_role(ClientRole.APPROVER, ClientRole.ADMINISTRATOR)
         existing = self.service.get_memory(memory_id)
@@ -206,25 +298,42 @@ class MemoryMCPAdapter:
         memory = self.service.archive_memory(memory_id)
         return memory.to_dict() if memory else None
 
+    @_audit_denial
     async def memory_history(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         memory = self.service.get_memory(memory_id)
         if memory is not None:
             self.policy.check_project(memory.project_id)
         return self.service.get_memory_history(memory_id, limit)
 
+    @_audit_denial
+    async def memory_access_audit(self, project_id: str | None = None,
+                                  limit: int = 100) -> list[dict[str, Any]]:
+        policy = self.policy
+        if policy.client_role != ClientRole.ADMINISTRATOR.value:
+            raise MemoryAccessError("administrator role required for access audit")
+        if project_id is None and policy.allowed_projects is not None:
+            raise MemoryAccessError("project is required for scoped access audit")
+        if project_id is not None:
+            policy.check_project(project_id)
+        return self.service.get_access_denials(project_id=project_id, limit=limit)
+
     async def memory_health(self) -> dict[str, Any]:
         return self.service.health()
 
 
-def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier | None = None,
+def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier | JWKSClientVerifier | None = None,
                   public_url: str | None = None) -> FastMCP:
     auth = None
     if token_verifier is not None:
         from mcp.server.auth.settings import AuthSettings
         # A bearer-token connector does not need us to operate an OAuth issuer,
         # but FastMCP requires a valid issuer URL when enabling its auth layer.
-        issuer_url = os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid")
-        auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url)
+        issuer_url = (token_verifier.issuer if isinstance(token_verifier, JWKSClientVerifier)
+                      else os.getenv("MEMORYCORE_AUTH_ISSUER_URL", public_url or "https://memorycore.invalid"))
+        options = {}
+        if "validate_token_resource" in getattr(AuthSettings, "model_fields", {}):
+            options["validate_token_resource"] = isinstance(token_verifier, JWKSClientVerifier)
+        auth = AuthSettings(issuer_url=issuer_url, resource_server_url=public_url, **options)
     server = FastMCP(
         "Memorycore",
         instructions=(
@@ -235,6 +344,7 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     )
     adapter = MemoryMCPAdapter(service, token_verifier=token_verifier)
     server.tool(name="memory_add")(adapter.memory_add)
+    server.tool(name="memory_duplicate_candidates")(adapter.memory_duplicate_candidates)
     server.tool(name="memory_get")(adapter.memory_get)
     server.tool(name="memory_search")(adapter.memory_search)
     server.tool(name="memory_retrieve_context")(adapter.memory_retrieve_context)
@@ -245,6 +355,7 @@ def create_server(service: MemoryService, *, token_verifier: StaticTokenVerifier
     server.tool(name="memory_correct")(adapter.memory_correct)
     server.tool(name="memory_archive")(adapter.memory_archive)
     server.tool(name="memory_history")(adapter.memory_history)
+    server.tool(name="memory_access_audit")(adapter.memory_access_audit)
     server.tool(name="memory_health")(adapter.memory_health)
     return server
 
@@ -264,12 +375,33 @@ def run_server(database_path: str | Path | None = None, *, transport: str | None
     ``streamable-http`` is the central-service transport. Stdio remains useful
     for local development and hosts that cannot yet connect to HTTP MCP.
     """
-    service = MemoryService(database_path or default_database_path())
+    target = database_path or default_database_path()
+    selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
+    lease = central_service_lease(target) if selected_transport != "stdio" else nullcontext()
+    with lease:
+        _run_server_owned(target, selected_transport, host, port)
+
+
+def _run_server_owned(target: str | Path, selected_transport: str,
+                      host: str | None, port: int | None) -> None:
+    bind_host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+    if selected_transport != "stdio" and bind_host not in {"127.0.0.1", "::1", "localhost"}:
+        raise ValueError("HTTP MCP must bind to loopback behind an HTTPS proxy or tunnel")
+    service = MemoryService(target)
     try:
-        selected_transport = transport or os.getenv("MEMORYCORE_TRANSPORT", "stdio")
         if selected_transport not in {"stdio", "streamable-http", "sse"}:
             raise ValueError("transport must be stdio, streamable-http, or sse")
-        token_verifier = StaticTokenVerifier.from_environment() if selected_transport != "stdio" else None
+        token_verifier = None
+        if selected_transport != "stdio":
+            static = StaticTokenVerifier.from_environment()
+            oauth = JWKSClientVerifier.from_environment()
+            if static is not None and oauth is not None:
+                raise ValueError("configure either static HTTP tokens or OAuth, not both")
+            token_verifier = oauth or static
+            if oauth is not None:
+                public_url = os.getenv("MEMORYCORE_PUBLIC_URL", "")
+                if public_url != oauth.audience:
+                    raise ValueError("OAuth audience must equal MEMORYCORE_PUBLIC_URL")
         if selected_transport != "stdio" and token_verifier is None and os.getenv("MEMORYCORE_ALLOW_INSECURE_HTTP", "").lower() not in {"1", "true", "yes"}:
             raise ValueError(
                 "HTTP MCP requires MEMORYCORE_HTTP_TOKENS_FILE. Set MEMORYCORE_ALLOW_INSECURE_HTTP=true only for isolated testing."
@@ -278,8 +410,18 @@ def run_server(database_path: str | Path | None = None, *, transport: str | None
             public_url=os.getenv("MEMORYCORE_PUBLIC_URL") or None)
         if selected_transport == "stdio":
             server.run(transport="stdio")
+        elif selected_transport == "streamable-http":
+            server.settings.host = bind_host
+            server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
+            import uvicorn
+
+            app = server.streamable_http_app()
+            app.add_middleware(_HTTPDenialAudit, service=service)
+            app.add_middleware(_Readiness, service=service)
+            uvicorn.run(app, host=server.settings.host, port=server.settings.port,
+                        log_level=server.settings.log_level.lower())
         else:
-            server.settings.host = host or os.getenv("MEMORYCORE_HOST", "127.0.0.1")
+            server.settings.host = bind_host
             server.settings.port = port or int(os.getenv("MEMORYCORE_PORT", "8000"))
             server.run(transport=selected_transport)
     finally:

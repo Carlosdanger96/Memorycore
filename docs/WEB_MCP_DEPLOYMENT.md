@@ -19,6 +19,36 @@ Never commit the registry, share a token between connectors, publish SQLite,
 or run HTTP with `MEMORYCORE_ALLOW_INSECURE_HTTP=true` outside a disposable
 local test.
 
+For an external OAuth issuer, use the JWT mode below instead of static tokens.
+The two authentication modes cannot be enabled together.
+
+## External OAuth issuer
+
+Memorycore acts as the resource server. An external authorization server issues
+RS256 JWT access tokens; Memorycore verifies the JWKS signature, issuer,
+audience, expiry, issue time, registered subject, and `memorycore` scope on
+each request. A local policy file maps the verified `sub` claim to a fixed role
+and project allowlist. Token claims cannot grant themselves a higher role.
+
+Install `memorycore[oauth,mcp]`. Copy
+`examples/oauth-clients.json.example` outside the repository and edit the
+client IDs to match the issuer's `sub` claims. Configure the issuer to issue
+tokens with the full Memorycore MCP URL as audience and the `memorycore` scope:
+
+```powershell
+$env:MEMORYCORE_OAUTH_ISSUER = "https://login.example.com/"
+$env:MEMORYCORE_OAUTH_AUDIENCE = "https://memory.example.com/mcp"
+$env:MEMORYCORE_OAUTH_JWKS_URL = "https://login.example.com/.well-known/jwks.json"
+$env:MEMORYCORE_OAUTH_CLIENTS_FILE = "C:\Memorycore\secrets\oauth-clients.json"
+$env:MEMORYCORE_PUBLIC_URL = $env:MEMORYCORE_OAUTH_AUDIENCE
+memorycore serve-http --host 127.0.0.1 --port 8000
+```
+
+Only HTTPS issuer, JWKS, and audience URLs are accepted. The service binds to
+loopback; put an HTTPS reverse proxy or secure tunnel in front of it. A live
+issuer, client enrollment, and public HTTPS endpoint still require deployment
+verification. Static-token mode remains available for the local tunnel.
+
 ## Configure client identities
 
 Copy `examples/http-clients.json.example` to a private location such as

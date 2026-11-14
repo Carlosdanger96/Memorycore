@@ -37,14 +37,23 @@ Multiple LLM clients
 SQLite (local prototype) → PostgreSQL (shared production)
 ```
 
+This storage path is authoritative for standalone Memorycore records. The
+planned Omni Memory integration has a different authority: canonical Markdown
+notes, with SQLite search data rebuilt from those notes and other authoritative
+records. See [Design Decisions](docs/DESIGN_DECISIONS.md) and the
+[Roadmap](docs/ROADMAP.md) for the boundary and verification gates. Omni client
+integration starts after the Memorycore completion gates pass.
+
 The current release includes SQLite storage, audit history, lifecycle controls,
 deterministic retrieval, backup/export/import, and a central MCP service mode.
 
 ## Status
 
-The repository contains the v0.2 prototype foundation. Possible-duplicate
-detection, PostgreSQL integration tests, and the Mistral Vibe ↔ Hermes live
-workflow remain required before calling it a complete shared-memory release.
+The repository contains the v0.2 prototype foundation. Local PostgreSQL
+migration and recovery tests pass against a disposable server. A deployed
+central-service recovery test, external HTTPS/OAuth verification, the Mistral
+Vibe ↔ Hermes live workflow, and ChatGPT connector discovery remain required
+before calling it a complete shared-memory release.
 
 The storage core is the first implementation layer of the shared-memory system. It is not the final product by itself. Memorycore reaches its main goal when multiple LLMs can reliably use the same memories through validated integrations.
 
@@ -175,9 +184,10 @@ included local PostgreSQL container, install `.[postgres,mcp]`, then set
 Each memory records its writer and provenance: `created_by`, `updated_by`,
 `client_id`, `model_provider`, `model_name`, `session_id`, `source_type`,
 `source_uri`, `source_id`, and optional `confidence` (0–1). The MCP tools are
-`memory_add`, `memory_get`, `memory_search`, `memory_retrieve_context`,
+`memory_add`, `memory_duplicate_candidates`, `memory_get`, `memory_search`, `memory_retrieve_context`,
 `memory_update`, `memory_approve`, `memory_reject`, `memory_archive`,
-`memory_history`, `memory_supersede`, `memory_correct`, and `memory_health`.
+`memory_history`, `memory_access_audit`, `memory_supersede`, `memory_correct`,
+and `memory_health`.
 
 Each local MCP process receives its identity from its environment. This prevents
 an LLM tool call from impersonating another client. Supported roles are
@@ -203,6 +213,14 @@ An unset allowlist permits all projects. `MEMORYCORE_REQUIRE_APPROVAL` lets a
 trusted client promote a reviewed memory from `pending` to `active` with
 `memory_approve`. Normal search and context retrieval return only `active`
 memories; an explicit `status` argument is required to retrieve history.
+SQLite activation rejects an exact case/whitespace match or a probable match
+with at least four distinct terms and 80% token overlap in the same project.
+`memory_duplicate_candidates` returns matching IDs and reasons so a reviewer
+can correct, supersede, or revise a proposal. The check is transactional for
+concurrent SQLite writes. PostgreSQL parity remains a separate release gate.
+Permission denials and HTTP authentication failures are recorded without
+request content or credentials. Administrators can inspect policy denials with
+`memory_access_audit`; the audit is included in JSONL recovery.
 Future supported integrations must preserve this contract and
 the same shared database rather than creating provider-specific memory silos.
 

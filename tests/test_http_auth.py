@@ -70,6 +70,10 @@ async def test_http_mcp_uses_bearer_tokens_for_identity_and_roles(tmp_path):
         else:
             pytest.fail("authenticated HTTP MCP server did not start")
 
+        async with httpx.AsyncClient(timeout=2, trust_env=False) as probe:
+            ready = await probe.get(f"http://127.0.0.1:{port}/readyz")
+        assert ready.status_code == 200 and ready.json() == {"ready": True}
+
         writer_client, writer_transport, writer = await _connect(
             url, "writer-token-012345678901234567890123456789"
         )
@@ -102,3 +106,78 @@ async def test_http_mcp_uses_bearer_tokens_for_identity_and_roles(tmp_path):
     finally:
         process.terminate()
         await process.wait()
+
+    # A second server owns the same disposable database after the first exits.
+    # The second client corrects the approved record; the first retrieves it.
+    restarted = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "memorycore.cli", "--db", str(tmp_path / "shared.db"),
+        "serve-http", "--host", "127.0.0.1", "--port", str(port),
+        env=env, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        for _ in range(40):
+            try:
+                async with httpx.AsyncClient(timeout=0.2, trust_env=False) as probe:
+                    if (await probe.get(f"http://127.0.0.1:{port}/readyz")).status_code == 200:
+                        break
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("restarted HTTP MCP server did not become ready")
+
+        reviewer_client, reviewer_transport, reviewer = await _connect(
+            url, "approver-token-01234567890123456789012345678"
+        )
+        try:
+            corrected = await reviewer.call_tool("memory_correct", {
+                "memory_id": record["id"], "content": "HTTP token identity survives verified restart",
+            })
+            assert not corrected.isError
+            replacement = json.loads(corrected.content[0].text)
+            history = await reviewer.call_tool("memory_history", {"memory_id": record["id"]})
+            assert not history.isError and len(json.loads(history.content[0].text)) >= 3
+        finally:
+            await reviewer.__aexit__(None, None, None)
+            await reviewer_transport.__aexit__(None, None, None)
+            await reviewer_client.aclose()
+
+        reader_client, reader_transport, reader = await _connect(
+            url, "writer-token-012345678901234567890123456789"
+        )
+        try:
+            found = await reader.call_tool("memory_search", {
+                "query": "verified restart", "project_id": "alpha",
+            })
+            assert not found.isError
+            assert json.loads(found.content[0].text)["id"] == replacement["id"]
+        finally:
+            await reader.__aexit__(None, None, None)
+            await reader_transport.__aexit__(None, None, None)
+            await reader_client.aclose()
+    finally:
+        restarted.terminate()
+        await restarted.wait()
+    from memorycore.memory_service import MemoryService
+
+    audit = MemoryService(tmp_path / "shared.db")
+    try:
+        denials = audit.get_access_denials(limit=10)
+        assert any(event["operation"] == "http_request" and
+                   event["reason"] == "unauthenticated" for event in denials)
+        assert all("token" not in str(event).lower() for event in denials)
+        before = audit.database.snapshot_records()
+        backup = tmp_path / "recovered.db"
+        audit.backup(backup)
+    finally:
+        audit.close()
+
+    restored = MemoryService(backup)
+    try:
+        after = restored.database.snapshot_records()
+        assert [item.to_dict() for item in after[0]] == [item.to_dict() for item in before[0]]
+        assert after[1:] == before[1:]
+        assert restored.search_memory(query="verified restart", project_id="alpha")[0].id == replacement["id"]
+        assert restored.search_memory(query="verified restart", project_id="beta") == []
+    finally:
+        restored.close()

@@ -23,29 +23,50 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    throw "Python 3.11 or newer is required. Install it from https://www.python.org/downloads/ and rerun this script."
+$SystemPython = Get-Command python -ErrorAction SilentlyContinue
+$Uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
+if (-not $Uv) {
+    foreach ($Candidate in @(
+        (Join-Path $env:USERPROFILE ".local\bin\uv.exe"),
+        (Join-Path $env:LOCALAPPDATA "hermes\bin\uv.exe"),
+        (Join-Path $env:APPDATA "uv\bin\uv.exe")
+    )) {
+        if (Test-Path -LiteralPath $Candidate) { $Uv = $Candidate; break }
+    }
 }
-
-$Version = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-if ([version]$Version -lt [version]"3.11") {
-    throw "Python 3.11 or newer is required; found Python $Version."
+if (-not $SystemPython -and -not $Uv) {
+    throw "Python 3.11+ or uv is required to create the virtual environment."
+}
+if ($SystemPython) {
+    $Version = & python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    if ([version]$Version -lt [version]"3.11") {
+        throw "Python 3.11 or newer is required; found Python $Version."
+    }
 }
 
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
-    & python -m venv .venv
+    if ($SystemPython) { & python -m venv .venv }
+    else { & $Uv venv --python 3.11 .venv }
+    if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed." }
 }
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
-& $Python -m pip install --upgrade pip
-& $Python -m pip install -e ".[mcp]"
+if ($Uv) { & $Uv pip install --python $Python -e ".[mcp]" }
+else {
+    & $Python -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
+    & $Python -m pip install -e ".[mcp]"
+}
+if ($LASTEXITCODE -ne 0) { throw "Memorycore dependency installation failed." }
 
 $DatabaseDirectory = Split-Path -Parent $DatabasePath
 if ($DatabaseDirectory) {
     New-Item -ItemType Directory -Force -Path $DatabaseDirectory | Out-Null
 }
 & $Python -m memorycore.cli --db $DatabasePath init
+if ($LASTEXITCODE -ne 0) { throw "Memorycore initialization failed." }
 & $Python -m memorycore.cli --db $DatabasePath doctor
+if ($LASTEXITCODE -ne 0) { throw "Memorycore doctor failed." }
 
 Write-Host ""
 Write-Host "Memorycore is ready."

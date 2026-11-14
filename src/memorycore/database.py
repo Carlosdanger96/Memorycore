@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Memory
+from .duplicates import find_candidates
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
     memory_type TEXT NOT NULL CHECK (
-        memory_type IN ('fact','decision','preference','procedure','correction','note')
+        memory_type IN ('fact','decision','preference','procedure','correction','observation','note')
     ),
     content TEXT NOT NULL,
     summary TEXT,
@@ -47,6 +48,10 @@ ON memories(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_memories_project_type
 ON memories(project_id, memory_type);
 
+-- Covering index for list_recent (project + status filter, recency order).
+CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated
+ON memories(project_id, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -68,6 +73,19 @@ CREATE TABLE IF NOT EXISTS memory_events (
 
 CREATE INDEX IF NOT EXISTS idx_memory_events_memory_created
 ON memory_events(memory_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS access_events (
+    id TEXT PRIMARY KEY,
+    client_id TEXT,
+    operation TEXT NOT NULL,
+    project_id TEXT,
+    memory_id TEXT,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_events_created
+ON access_events(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS memory_links (
     id TEXT PRIMARY KEY,
@@ -121,7 +139,7 @@ class SQLiteDatabase:
             self.connection.commit()
 
     def _apply_migrations(self) -> None:
-        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';")]
+        migrations = [(1, "initial_storage", "embedded-v1"), (2, "active_retrieval_index", "CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated ON memories(project_id, updated_at DESC) WHERE status = 'active';"), (3, "list_recent_covering_index", "CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated ON memories(project_id, status, updated_at DESC);")]
         applied = {row[0]: row[1] for row in self.connection.execute("SELECT version, checksum FROM schema_migrations")}
         for version, name, sql in migrations:
             checksum = sql if version == 1 else hashlib.sha256(sql.encode()).hexdigest()
@@ -135,25 +153,49 @@ class SQLiteDatabase:
             self.connection.executescript("BEGIN IMMEDIATE; " + sql + " INSERT INTO schema_migrations(version, name, checksum, applied_at) VALUES (" + str(version) + ", '" + name + "', '" + checksum + "', datetime('now')); COMMIT;")
 
     def _upgrade_status_constraint(self) -> None:
-        """Rebuild the v0.1 table when its CHECK constraint lacks new statuses.
+        """Rebuild the v0.1 table when its CHECK constraint lacks new statuses OR types.
 
         SQLite cannot alter a CHECK constraint in place. This keeps databases
-        created before pending/rejected/contradicted existed usable without a
-        manual export/import step.
+        created before pending/rejected/contradicted (and the observation
+        memory_type) existed usable without a manual export/import step.
         """
         sql = self.connection.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memories'"
         ).fetchone()[0]
-        if "'pending'" in sql:
+        needs_rebuild = "'pending'" not in sql or "'observation'" not in sql
+        if not needs_rebuild:
             return
+        existing = {row["name"] for row in self.connection.execute("PRAGMA table_info(memories)")}
+        columns = (
+            "id", "project_id", "memory_type", "content", "summary", "tags", "status",
+            "created_by", "updated_by", "client_id", "model_provider", "model_name",
+            "session_id", "source_type", "source_uri", "source_id", "confidence",
+            "metadata", "created_at", "updated_at",
+        )
+        defaults = {
+            "summary": "NULL", "tags": "'[]'", "status": "'active'", "created_by": "NULL",
+            "updated_by": "created_by" if "created_by" in existing else "NULL",
+            "client_id": "NULL", "model_provider": "NULL", "model_name": "NULL",
+            "session_id": "NULL", "source_type": "'manual_import'", "source_uri": "NULL",
+            "source_id": "NULL", "confidence": "NULL", "metadata": "'{}'",
+        }
+        projection = ", ".join(
+            name if name in existing else defaults[name] for name in columns
+        )
         try:
-            self.connection.executescript("""
+            self.connection.executescript(f"""
             BEGIN IMMEDIATE;
+            CREATE TEMP TABLE preserved_events AS
+                SELECT rowid AS original_order, * FROM memory_events;
+            CREATE TEMP TABLE preserved_links AS
+                SELECT rowid AS original_order, * FROM memory_links;
             DROP TRIGGER IF EXISTS memories_ai;
             DROP TRIGGER IF EXISTS memories_ad;
             DROP TRIGGER IF EXISTS memories_au;
             DROP INDEX IF EXISTS idx_memories_project_status;
             DROP INDEX IF EXISTS idx_memories_project_type;
+            DROP INDEX IF EXISTS idx_memories_project_status_updated;
+            DROP INDEX IF EXISTS idx_memories_active_project_updated;
             DROP TABLE IF EXISTS memory_events;
             DROP TABLE IF EXISTS memory_links;
             ALTER TABLE memories RENAME TO memories_legacy;
@@ -161,7 +203,7 @@ class SQLiteDatabase:
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
                 memory_type TEXT NOT NULL CHECK (
-                    memory_type IN ('fact','decision','preference','procedure','correction','note')
+                    memory_type IN ('fact','decision','preference','procedure','correction','observation','note')
                 ),
                 content TEXT NOT NULL,
                 summary TEXT,
@@ -179,22 +221,21 @@ class SQLiteDatabase:
                 source_uri TEXT,
                 source_id TEXT,
                 confidence REAL,
-                metadata TEXT NOT NULL DEFAULT '{}',
+                metadata TEXT NOT NULL DEFAULT '{{}}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
-            INSERT INTO memories (
-                id, project_id, memory_type, content, summary, tags, status,
-                created_by, updated_by, metadata, created_at, updated_at
-            ) SELECT
-                id, project_id, memory_type, content, summary, tags, status,
-                created_by, created_by, metadata, created_at, updated_at
-            FROM memories_legacy;
+            INSERT INTO memories ({", ".join(columns)})
+            SELECT {projection} FROM memories_legacy;
             DROP TABLE memories_legacy;
             CREATE INDEX IF NOT EXISTS idx_memories_project_status
             ON memories(project_id, status);
             CREATE INDEX IF NOT EXISTS idx_memories_project_type
             ON memories(project_id, memory_type);
+            CREATE INDEX IF NOT EXISTS idx_memories_project_status_updated
+            ON memories(project_id, status, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memories_active_project_updated
+            ON memories(project_id, updated_at DESC) WHERE status = 'active';
             CREATE TABLE memory_events (
                 id TEXT PRIMARY KEY,
                 memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -203,11 +244,17 @@ class SQLiteDatabase:
                 client_id TEXT,
                 previous_state TEXT,
                 new_state TEXT,
-                details TEXT NOT NULL DEFAULT '{}',
+                details TEXT NOT NULL DEFAULT '{{}}',
                 created_at TEXT NOT NULL
             );
             CREATE INDEX idx_memory_events_memory_created
             ON memory_events(memory_id, created_at DESC);
+            INSERT INTO memory_events (
+                id, memory_id, project_id, event_type, client_id, previous_state,
+                new_state, details, created_at
+            ) SELECT id, memory_id, project_id, event_type, client_id,
+                     previous_state, new_state, details, created_at
+              FROM preserved_events ORDER BY original_order;
             CREATE TABLE memory_links (
                 id TEXT PRIMARY KEY,
                 from_memory_id TEXT NOT NULL REFERENCES memories(id),
@@ -217,6 +264,12 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL,
                 UNIQUE(from_memory_id, to_memory_id, relation_type)
             );
+            INSERT INTO memory_links (
+                id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+            ) SELECT id, from_memory_id, to_memory_id, relation_type,
+                     created_by, created_at FROM preserved_links ORDER BY original_order;
+            DROP TABLE preserved_events;
+            DROP TABLE preserved_links;
             DELETE FROM memory_fts;
             INSERT INTO memory_fts(id, content, summary, tags)
             SELECT id, content, COALESCE(summary, ''), tags FROM memories;
@@ -262,9 +315,37 @@ class SQLiteDatabase:
         with self._lock:
             self.connection.close()
 
-    def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
+    def add_link(self, *, from_memory_id: str, to_memory_id: str,
+                 relation_type: str, created_by: str | None, created_at: str) -> None:
+        """Insert a supersedes/corrects/contradicts link. Idempotent: the UNIQUE
+        constraint on (from, to, relation_type) makes a replay a no-op."""
         with self._lock:
             self.connection.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (id, from_memory_id, to_memory_id, relation_type, created_by, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (str(__import__("uuid").uuid4()), from_memory_id, to_memory_id,
+                 relation_type, created_by, created_at),
+            )
+            self.connection.commit()
+
+    def list_links(self, memory_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT * FROM memory_links
+                   WHERE from_memory_id = ? OR to_memory_id = ?
+                   ORDER BY created_at ASC""",
+                (memory_id, memory_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add(self, values: dict[str, Any], audit_event: dict[str, Any] | None = None) -> Memory:
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                if values["status"] == "active":
+                    self._reject_duplicate(values["project_id"], values["content"])
+                self.connection.execute(
                 """
                 INSERT INTO memories (
                     id, project_id, memory_type, content, summary, tags, status,
@@ -287,9 +368,12 @@ class SQLiteDatabase:
                     values["created_at"], values["updated_at"],
                 ),
             )
-            if audit_event:
-                self._insert_event(audit_event)
-            self.connection.commit()
+                if audit_event:
+                    self._insert_event(audit_event)
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
         memory = self.get(values["id"])
         if memory is None:
             raise RuntimeError("inserted memory could not be reloaded")
@@ -347,7 +431,11 @@ class SQLiteDatabase:
         updated_at = values.get("updated_at", current.updated_at)
         updated_by = values.get("updated_by", current.updated_by)
         with self._lock:
-            self.connection.execute(
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                if status == "active" and (current.status != "active" or content != current.content):
+                    self._reject_duplicate(current.project_id, content, exclude_id=memory_id)
+                self.connection.execute(
                 """
                 UPDATE memories
                 SET content = ?, summary = ?, tags = ?, status = ?,
@@ -357,23 +445,149 @@ class SQLiteDatabase:
                 (content, summary, json.dumps(tags, ensure_ascii=False), status,
                  json.dumps(metadata, ensure_ascii=False), updated_at, updated_by, memory_id),
             )
-            if audit_event:
-                self._insert_event(audit_event)
-            self.connection.commit()
+                if audit_event:
+                    self._insert_event(audit_event)
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
         return self.get(memory_id)
+
+    def duplicate_candidates(self, project_id: str, content: str,
+                             exclude_id: str | None = None) -> list[dict[str, Any]]:
+        """Deterministic same-project exact and high-overlap candidates."""
+        with self._lock:
+            rows = self.connection.execute(
+                """SELECT id, content FROM memories
+                   WHERE project_id = ? AND status = 'active' AND id != ?""",
+                (project_id, exclude_id or ""),
+            ).fetchall()
+        return find_candidates(rows, content)
+
+    def _reject_duplicate(self, project_id: str, content: str,
+                          exclude_id: str | None = None) -> None:
+        matches = self.duplicate_candidates(project_id, content, exclude_id)
+        if matches:
+            first = matches[0]
+            raise ValueError(f"{first['reason']} duplicate memory exists: {first['memory_id']}")
 
     def list_events(self, memory_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
+            # Order by rowid (insertion order), not id: event ids are random
+            # UUIDs, so a same-timestamp tie-break on id is non-deterministic.
+            # created_at alone is also insufficient — two events in one
+            # transaction share the same microsecond timestamp.
             rows = self.connection.execute(
-                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY created_at ASC LIMIT ?",
+                "SELECT * FROM memory_events WHERE memory_id = ? ORDER BY rowid ASC LIMIT ?",
                 (memory_id, limit),
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details"])} for row in rows]
+
+    def record_access_denial(self, event: dict[str, Any]) -> None:
+        with self._lock:
+            self.connection.execute(
+                """INSERT INTO access_events (
+                    id, client_id, operation, project_id, memory_id, reason, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (event["id"], event.get("client_id"), event["operation"],
+                 event.get("project_id"), event.get("memory_id"), event["reason"],
+                 event["created_at"]),
+            )
+            self.connection.commit()
+
+    def list_access_denials(self, project_id: str | None, limit: int) -> list[dict[str, Any]]:
+        with self._lock:
+            if project_id is None:
+                rows = self.connection.execute(
+                    "SELECT * FROM access_events ORDER BY rowid DESC LIMIT ?", (limit,)
+                ).fetchall()
+            else:
+                rows = self.connection.execute(
+                    """SELECT * FROM access_events WHERE project_id = ?
+                       ORDER BY rowid DESC LIMIT ?""", (project_id, limit)
+                ).fetchall()
+        return [dict(row) for row in rows]
 
     def all_memories(self) -> list[Memory]:
         with self._lock:
             rows = self.connection.execute("SELECT * FROM memories ORDER BY created_at, id").fetchall()
         return [self._from_row(row) for row in rows]
+
+    def snapshot_records(self) -> tuple[list[Memory], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Read a consistent snapshot including the full audit and link history."""
+        with self._lock:
+            self.connection.execute("BEGIN")
+            try:
+                memories = [self._from_row(row) for row in self.connection.execute(
+                    "SELECT * FROM memories ORDER BY rowid"
+                )]
+                events = [{**dict(row), "details": json.loads(row["details"])}
+                          for row in self.connection.execute(
+                              "SELECT * FROM memory_events ORDER BY rowid"
+                          )]
+                links = [dict(row) for row in self.connection.execute(
+                    "SELECT * FROM memory_links ORDER BY rowid"
+                )]
+                access_events = [dict(row) for row in self.connection.execute(
+                    "SELECT * FROM access_events ORDER BY rowid"
+                )]
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        return memories, events, links, access_events
+
+    def restore_records(self, memories: list[dict[str, Any]],
+                        events: list[dict[str, Any]], links: list[dict[str, Any]],
+                        access_events: list[dict[str, Any]]) -> int:
+        """Restore a complete snapshot into an empty database atomically."""
+        with self._lock:
+            try:
+                self.connection.execute("BEGIN IMMEDIATE")
+                for table in ("memories", "memory_events", "memory_links", "access_events"):
+                    if self.connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone():
+                        raise ValueError("JSONL restore requires an empty Memorycore database")
+                for item in memories:
+                    self.connection.execute(
+                        """INSERT INTO memories (
+                            id, project_id, memory_type, content, summary, tags, status,
+                            created_by, updated_by, client_id, model_provider, model_name,
+                            session_id, source_type, source_uri, source_id, confidence,
+                            metadata, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (item["id"], item["project_id"], item["memory_type"], item["content"],
+                         item.get("summary"), json.dumps(item["tags"], ensure_ascii=False),
+                         item["status"], item.get("created_by"), item.get("updated_by"),
+                         item.get("client_id"), item.get("model_provider"), item.get("model_name"),
+                         item.get("session_id"), item["source_type"], item.get("source_uri"),
+                         item.get("source_id"), item.get("confidence"),
+                         json.dumps(item["metadata"], ensure_ascii=False),
+                         item["created_at"], item["updated_at"]),
+                    )
+                for event in events:
+                    self._insert_event(event)
+                for link in links:
+                    self.connection.execute(
+                        """INSERT INTO memory_links (
+                            id, from_memory_id, to_memory_id, relation_type, created_by, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)""",
+                        (link["id"], link["from_memory_id"], link["to_memory_id"],
+                         link["relation_type"], link.get("created_by"), link["created_at"]),
+                    )
+                for event in access_events:
+                    self.connection.execute(
+                        """INSERT INTO access_events (
+                            id, client_id, operation, project_id, memory_id, reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (event["id"], event.get("client_id"), event["operation"],
+                         event.get("project_id"), event.get("memory_id"), event["reason"],
+                         event["created_at"]),
+                    )
+                self.connection.commit()
+            except Exception:
+                self.connection.rollback()
+                raise
+        return len(memories)
 
     def find_exact_active(self, project_id: str, memory_type: str, content: str) -> Memory | None:
         with self._lock:
@@ -417,6 +631,9 @@ class SQLiteDatabase:
         with self._lock:
             try:
                 self.connection.execute("BEGIN IMMEDIATE")
+                self._reject_duplicate(
+                    replacement["project_id"], replacement["content"], exclude_id=original.id
+                )
                 self.connection.execute("""INSERT INTO memories (id, project_id, memory_type, content, summary, tags, status, created_by, updated_by, client_id, model_provider, model_name, session_id, source_type, source_uri, source_id, confidence, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (replacement["id"], replacement["project_id"], replacement["memory_type"], replacement["content"], replacement.get("summary"), json.dumps(replacement.get("tags", [])), replacement["status"], replacement.get("created_by"), replacement.get("updated_by"), replacement.get("client_id"), replacement.get("model_provider"), replacement.get("model_name"), replacement.get("session_id"), replacement["source_type"], replacement.get("source_uri"), replacement.get("source_id"), replacement.get("confidence"), json.dumps(replacement.get("metadata", {})), replacement["created_at"], replacement["updated_at"]))
                 self.connection.execute("UPDATE memories SET status=?, updated_by=?, updated_at=? WHERE id=?", (original_status, replacement.get("created_by"), replacement["updated_at"], original.id))
                 self.connection.execute("INSERT INTO memory_links(id, from_memory_id, to_memory_id, relation_type, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (str(__import__('uuid').uuid4()), replacement["id"], original.id, relation_type, replacement.get("created_by"), replacement["created_at"]))
@@ -438,6 +655,17 @@ class SQLiteDatabase:
             self.connection.execute("SELECT rowid FROM memory_fts LIMIT 1").fetchone()
         return {"ok": True, "database": str(self.path), "memory_count": int(count),
                 "sqlite_version": sqlite3.sqlite_version, "fts5": True}
+
+    def checkpoint(self) -> dict[str, Any]:
+        """TRUNCATE checkpoint: fold the WAL back into the main DB file.
+
+        Keeps the -wal file from growing unbounded under sync churn and makes
+        plain file-copy backups capture all committed state."""
+        with self._lock:
+            row = self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        busy, log_frames, checkpointed = (row[0], row[1], row[2]) if row else (None, None, None)
+        return {"ok": True, "busy": bool(busy), "log_frames": log_frames,
+                "checkpointed_frames": checkpointed}
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> Memory:

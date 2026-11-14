@@ -11,6 +11,7 @@ class MemoryType(StrEnum):
     PREFERENCE = "preference"
     PROCEDURE = "procedure"
     CORRECTION = "correction"
+    OBSERVATION = "observation"
     NOTE = "note"
 
 

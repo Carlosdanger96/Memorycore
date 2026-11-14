@@ -22,6 +22,14 @@ def build_fts_query(query: str) -> str:
     return " AND ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
 
 
+def build_fts_query_or(query: str) -> str:
+    """OR variant: any matching term qualifies. Used as a fallback when the
+    AND query returns nothing, so a slightly-off multi-word query still
+    surfaces the best partial matches instead of an empty result."""
+    tokens = _TOKEN_RE.findall(query.strip())
+    return " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+
+
 def render_context(memories: list[dict[str, object]]) -> str:
     blocks: list[str] = []
     for item in memories:

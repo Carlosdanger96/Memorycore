@@ -1,0 +1,14 @@
+[
+  {
+    "client_id": "hermes-client",
+    "client_role": "writer",
+    "allowed_projects": ["memorycore"],
+    "require_approval": true,
+    "model_provider": "local"
+  },
+  {
+    "client_id": "reviewer-client",
+    "client_role": "approver",
+    "allowed_projects": ["memorycore"]
+  }
+]
